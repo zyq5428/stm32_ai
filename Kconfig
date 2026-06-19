@@ -1,0 +1,4 @@
+# Kconfig - STM32 AI 应用配置
+# 必须引用 Zephyr 主 Kconfig 文件
+
+source "Kconfig.zephyr"

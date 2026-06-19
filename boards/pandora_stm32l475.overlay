@@ -1,0 +1,10 @@
+/*
+ * pandora_stm32l475.overlay — 设备树覆盖文件
+ * 为绿色 LED 添加便捷别名
+ */
+/ {
+	aliases {
+		/* 绿色 LED 别名，便于代码中通过 DT_ALIAS 引用 */
+		green-led = &green_led;
+	};
+};
