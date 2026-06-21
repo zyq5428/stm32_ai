@@ -1,32 +1,43 @@
 /*
- * pandora_stm32l475.overlay — 设备树覆盖文件
+ * mcuboot.overlay — MCUboot 引导程序设备树覆盖
  *
  * 功能:
- *   1. 为绿色 LED 添加便捷别名
- *   2. 定义 Flash 分区 (与 MCUboot 分区布局一致)
+ *   1. 启用 USART2 (PA2/PA3) 作为 mcumgr 串口恢复通道
+ *   2. 配置 KEY0 (PD10) 作为串口恢复入口按键
  *
  * 硬件: Pandora STM32L475 IoT Board
  */
+
 / {
+	/* [设备树] 别名定义 */
 	aliases {
-		/* 绿色 LED 别名，便于代码中通过 DT_ALIAS 引用 */
-		green-led = &green_led;
+		/* KEY0 (PD10=joy_right) 板级 DTS 已定义，直接引用作为串口恢复入口检测按键 */
+		mcuboot-button0 = &joy_right;
 	};
 
+	/* [设备树] 选择节点 */
 	chosen {
-		/* ★ 指定应用代码分区 — 应用链接到 slot0 (0x08010000) 而非 Flash 起始 */
-		zephyr,code-partition = &slot0_partition;
+		/* USART2 作为 mcumgr 串口升级专用通道 */
+		zephyr,uart-mcumgr = &usart2;
 	};
 };
 
+/* [设备树] 启用 USART2: PA2(TX) + PA3(RX), 115200 */
+&usart2 {
+	pinctrl-0 = <&usart2_tx_pa2 &usart2_rx_pa3>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+	status = "okay";
+};
+
 /*
- * [设备树] Flash 分区定义 — 与 MCUboot Overwrite-Only 模式一致
+ * [设备树] Flash 分区定义 — MCUboot Overwrite-Only (Upgrade-Only) 模式
  *
  * STM32L475VET6 内部 Flash: 512KB @ 0x08000000
  * ┌──────────────────┐ 0x08000000
  * │ boot_partition   │ 64KB — MCUboot 引导程序
  * ├──────────────────┤ 0x08010000
- * │ slot0_partition  │ 224KB — 应用程序主镜像 (本应用)
+ * │ slot0_partition  │ 224KB — 应用程序主镜像
  * ├──────────────────┤ 0x08048000
  * │ slot1_partition  │ 224KB — 升级镜像暂存槽
  * └──────────────────┘ 0x08080000
@@ -50,7 +61,7 @@
 			reg = <0x00010000 0x38000>;
 		};
 
-		/* 升级镜像暂存槽 (224KB) */
+		/* 升级镜像暂存槽 (224KB) — 串口升级固件先写入此槽 */
 		slot1_partition: partition@48000 {
 			label = "image-1";
 			reg = <0x00048000 0x38000>;
