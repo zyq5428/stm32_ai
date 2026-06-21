@@ -14,7 +14,7 @@
 LOG_MODULE_REGISTER(LED_TASK, LOG_LEVEL_INF);
 
 /* [设备树] 从别名 green-led 获取 GPIO 规格 */
-static const struct gpio_dt_spec led_green = GPIO_DT_SPEC_GET(DT_ALIAS(green_led), gpios);
+static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 
 /**
  * @brief LED 线程入口函数
@@ -33,15 +33,15 @@ void led_thread_entry(void *p1, void *p2, void *p3)
 	int ret; /* 函数返回状态码 */
 
 	/* [检查] 验证 GPIO 设备是否已就绪 */
-	if (gpio_is_ready_dt(&led_green)) {
-		LOG_DBG("Found LED device %s", led_green.port->name);
+	if (gpio_is_ready_dt(&led)) {
+		LOG_DBG("Found LED device %s", led.port->name);
 	} else {
-		LOG_ERR("LED device %s is not ready", led_green.port->name);
+		LOG_ERR("LED device %s is not ready", led.port->name);
 		return; /* 设备不可用，终止线程 */
 	}
 
 	/* [配置] 设置 GPIO 为输出，初始状态为关闭（共阳极：高电平=灭） */
-	ret = gpio_pin_configure_dt(&led_green, GPIO_OUTPUT_INACTIVE);
+	ret = gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
 	if (ret < 0) {
 		LOG_ERR("Error: Failed to configure LED pin (ret=%d)", ret);
 		while (1) { return; }
@@ -53,7 +53,7 @@ void led_thread_entry(void *p1, void *p2, void *p3)
 		k_msleep(500);
 
 		/* [操作] 翻转 LED 引脚电平 */
-		gpio_pin_toggle_dt(&led_green);
+		gpio_pin_toggle_dt(&led);
 	}
 }
 
