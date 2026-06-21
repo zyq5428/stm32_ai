@@ -2,10 +2,12 @@
  * mcuboot.overlay — MCUboot 引导程序设备树覆盖
  *
  * 功能:
- *   1. 启用 USART2 (PA2/PA3) 作为 mcumgr 串口恢复通道
+ *   1. 启用 USART1 (PA9/PA10) 作为 mcumgr 串口恢复通道
  *   2. 配置 KEY0 (PD10) 作为串口恢复入口按键
  *
  * 硬件: Pandora STM32L475 IoT Board
+ * 架构: USART1 同时用于 ① 应用 Shell/日志 ② MCUboot 串口恢复
+ *       两者分时复用 — MCUboot 仅在上电检测阶段使用 USART1
  */
 
 / {
@@ -17,14 +19,14 @@
 
 	/* [设备树] 选择节点 */
 	chosen {
-		/* USART2 作为 mcumgr 串口升级专用通道 */
-		zephyr,uart-mcumgr = &usart2;
+		/* USART1 作为 mcumgr 串口升级专用通道 */
+		zephyr,uart-mcumgr = &usart1;
 	};
 };
 
-/* [设备树] 启用 USART2: PA2(TX) + PA3(RX), 115200 */
-&usart2 {
-	pinctrl-0 = <&usart2_tx_pa2 &usart2_rx_pa3>;
+/* [设备树] 启用 USART1: PA9(TX) + PA10(RX), 115200 */
+&usart1 {
+	pinctrl-0 = <&usart1_tx_pa9 &usart1_rx_pa10>;
 	pinctrl-names = "default";
 	current-speed = <115200>;
 	status = "okay";

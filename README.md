@@ -1,4 +1,4 @@
-# STM32 AI — Pandora STM32L475 MCUboot + USART2 串口升级
+# STM32 AI — Pandora STM32L475 MCUboot + Shell + mcumgr 串口升级
 
 ## 项目信息
 
@@ -9,9 +9,11 @@
 | **Flash/SRAM** | 512KB / 128KB |
 | **RTOS** | Zephyr RTOS v4.4.99 |
 | **引导程序** | MCUboot (Overwrite-Only 模式) |
-| **签名算法** | RSA-2048 |
-| **升级通道** | USART2 (PA2/PA3) + mcumgr SMP 协议 |
-| **项目目标** | 绿色 LED 1Hz 闪烁 + MCUboot 安全引导 + 串口升级 |
+| **签名算法** | RSA-2048（项目专用密钥 `root-rsa-2048.pem`） |
+| **升级通道** | USART1 (PA9/PA10, ST-Link VCP) — Shell/日志/串口升级三合一 |
+| **Shell** | Zephyr Shell 交互式命令行（USART1） |
+| **mcumgr** | SMP over Shell 传输层（应用内，与 Shell 共存无冲突） |
+| **项目目标** | LED 闪烁 + Shell 命令行 + MCUboot 安全引导 + 串口升级 |
 
 ## 硬件说明
 
@@ -34,12 +36,14 @@
 | KEY2 | PD8 | 用户自定义 |
 | WK_UP | PC13 | 唤醒按键 |
 
-### 串口分配
+### 串口分配（三合一架构）
 
 | 串口 | 引脚 | 用途 |
 |------|------|------|
-| USART1 | PA9(TX) / PA10(RX) | 应用控制台 (ST-Link VCP, 115200) |
-| **USART2** | **PA2(TX) / PA3(RX)** | **MCUboot 串口升级通道 (115200)** |
+| **USART1** | **PA9(TX) / PA10(RX)** | **Shell 命令行 + 日志输出 + MCUboot 串口恢复（分时复用）** |
+| USART2 | PA2(TX) / PA3(RX) | 空闲（可分配给其他外设） |
+
+> **分时复用原理**：上电时 MCUboot 先运行，若检测到 KEY0 按下则接管 USART1 进入串口恢复模式；否则启动应用，应用在 USART1 上运行 Shell 和日志。
 
 ### 调试接口
 
@@ -58,11 +62,12 @@
 │     ↓                                    │
 │  检测 KEY0 (PD10) 是否按下?              │
 │    ├─ 按下 → 进入串口恢复模式              │
-│    │         USART2 等待 mcumgr 上传固件   │
+│    │         USART1 等待 mcumgr 上传固件   │
 │    │         写入 slot1 → 拷贝到 slot0      │
 │    │         跳转执行新固件                  │
 │    └─ 未按 → 校验 slot0 RSA-2048 签名      │
 │              ├─ 通过 → 启动应用 (0x08010000)│
+│              │         USART1 运行 Shell    │
 │              └─ 失败 → 进入串口恢复模式     │
 └──────────────────────────────────────────┘
 ```
@@ -86,21 +91,21 @@
 ```
 stm32_ai/
 ├── CMakeLists.txt                       # CMake 构建文件
-├── prj.conf                             # 应用 Kconfig 配置
+├── prj.conf                             # ★ 应用 Kconfig (Shell + mcumgr + LED)
 ├── Kconfig                              # 应用级 Kconfig
 ├── VERSION                              # 版本文件
 ├── README.md                            # 本文件
-├── root-rsa-2048.pem                    # 项目签名密钥
+├── root-rsa-2048.pem                    # ★ 项目专用 RSA-2048 签名密钥
 ├── stm32l475的mcuboot教程.md            # ★ MCUboot 完整教程
-├── sysbuild.conf                        # ★ Sysbuild 入口 (启用 MCUboot)
+├── sysbuild.conf                        # ★ Sysbuild 入口 (密钥路径 + MCUboot 模式)
 ├── sysbuild/
 │   ├── mcuboot.conf                     # ★ MCUboot Kconfig (串口恢复配置)
-│   └── mcuboot.overlay                  # ★ MCUboot DTS (USART2 + 分区 + GPIO)
+│   └── mcuboot.overlay                  # ★ MCUboot DTS (USART1 + 分区 + GPIO)
 ├── boards/
-│   └── pandora_stm32l475.overlay        # 应用 DTS (LED + 分区定义)
+│   └── pandora_stm32l475.overlay        # 应用 DTS (LED + 分区 + 代码链接)
 └── src/
     ├── main.c                           # 主程序 (仅打印 + 永久休眠)
-    └── led_thread.c                     # 绿色 LED 闪烁线程
+    └── led_thread.c                     # LED 闪烁线程
 ```
 
 > ★ 标记为 MCUboot 关键文件。
@@ -115,7 +120,7 @@ stm32_ai/
 - Python 3.12+（虚拟环境 `.venv`）
 - Zephyr SDK 1.0.1（工具链 arm-zephyr-eabi）
 - CMake + Ninja
-- `pip install intelhex cbor2 pyyaml cryptography`（imgtool.py 依赖）
+- `pip install intelhex cbor2 pyyaml cryptography mcumgr`（imgtool.py 和 mcumgr 依赖）
 
 ### MCUboot 多镜像编译 (Sysbuild)
 
@@ -139,12 +144,12 @@ cd E:\zephyrproject\ && .\.venv\scripts\Activate.ps1 && west build -b pandora_st
 ```
 build/
 ├── mcuboot/zephyr/
-│   ├── zephyr.elf         # MCUboot ELF (~1.8MB)
-│   ├── zephyr.bin         # MCUboot 二进制 (~44KB)
+│   ├── zephyr.elf         # MCUboot ELF
+│   ├── zephyr.bin         # MCUboot 二进制 (~45KB)
 │   └── zephyr.hex         # MCUboot Intel HEX
 ├── stm32_ai/zephyr/
-│   ├── zephyr.elf         # 应用 ELF (~1MB)
-│   ├── zephyr.signed.bin  # ★ 已签名应用二进制 (~28KB)
+│   ├── zephyr.elf         # 应用 ELF
+│   ├── zephyr.signed.bin  # ★ 已签名应用二进制 (~68KB)
 │   └── zephyr.signed.hex  # ★ 已签名应用 HEX
 └── _sysbuild/             # Sysbuild 内部文件
 ```
@@ -153,12 +158,12 @@ build/
 
 ```
 MCUboot:
-  FLASH:  45,120 B  / 512 KB  ( 8.61%)  — fits in 64KB boot_partition
-  RAM:    35,968 B  /  96 KB  (36.59%)
+  FLASH:  44,948 B  / 512 KB  ( 8.57%)  — fits in 64KB boot_partition
+  RAM:    35,904 B  /  96 KB  (36.52%)
 
-Application:
-  FLASH: ~28,000 B  / 224 KB  (12.50%)  — signed, fits in slot0_partition
-  RAM:    ~5,000 B  /  96 KB  ( 5.00%)
+Application (含 Shell + mcumgr):
+  FLASH:  68,132 B  / 224 KB  (29.75%)  — fits in slot0_partition
+  RAM:    18,720 B  /  96 KB  (19.04%)
 ```
 
 ---
@@ -177,7 +182,7 @@ west flash
 1. Micro USB 线连接开发板 **ST-Link 接口**
 2. PC 设备管理器可见 **ST-Link Debug** 和 **STMicroelectronics STLink Virtual COM Port**
 
-### 正常启动验证
+### 正常启动验证（Shell 模式）
 
 1. 连接 USART1 (ST-Link VCP, 115200):
    ```powershell
@@ -189,34 +194,76 @@ west flash
    *** Booting Zephyr OS build v4.4.0-xxx ***
    [00:00:00.000] <inf> main: 应用启动完成, Board: pandora_stm32l475
    [00:00:00.100] <inf> LED_TASK: LED Thread started
+   uart:~$
    ```
-4. 绿色 LED 以 1Hz 频率闪烁
+4. Shell 提示符 `uart:~$` 出现，可输入命令（按 Tab 查看可用命令）
+5. LED 以 1Hz 频率闪烁
+
+### Shell 命令示例
+
+```
+uart:~$ help              # 查看所有可用命令
+uart:~$ device list       # 列出所有设备
+uart:~$ kernel version    # 查看内核版本
+uart:~$ mcumgr            # 进入 mcumgr SMP 模式（用于设备管理）
+```
 
 ---
 
-## 串口升级 (USART2 + mcumgr)
+## 串口升级 (USART1 + mcumgr)
 
-### 进入串口恢复模式
+### 方式一：MCUboot 串口恢复模式（推荐用于固件升级）
 
-1. 连接 USART2 (PA2/PA3) 到 PC USB-TTL 模块
+1. 保持 USART1 (ST-Link VCP) 连接到 PC
 2. **按住 KEY0 不放** → 按 RESET → 等待 1 秒 → 松开 KEY0
-3. MCUboot 检测到按键 → 进入 mcumgr 串口恢复模式
-
-### 升级流程
+3. MCUboot 检测到按键 → 接管 USART1 → 进入 mcumgr 串口恢复模式
 
 ```powershell
-# ① 安装 mcumgr
-pip install mcumgr
+# ① 查看当前镜像信息
+mcumgr --conntype serial --connstring "COM5,baud=115200" image list
 
-# ② 查看当前镜像信息
-mcumgr --conntype serial --connstring "COM6,baud=115200" image list
+# ② 上传新固件 (必须是 .signed.bin)
+mcumgr --conntype serial --connstring "COM5,baud=115200" image upload build/stm32_ai/zephyr/zephyr.signed.bin
 
-# ③ 上传新固件 (必须是 .signed.bin)
-mcumgr --conntype serial --connstring "COM6,baud=115200" image upload build/stm32_ai/zephyr/zephyr.signed.bin
-
-# ④ 复位启动新固件
-mcumgr --conntype serial --connstring "COM6,baud=115200" reset
+# ③ 复位启动新固件
+mcumgr --conntype serial --connstring "COM5,baud=115200" reset
 ```
+
+### 方式二：应用内 mcumgr（Shell 传输层）
+
+应用运行时通过 Shell 使用 mcumgr：
+
+```
+uart:~$ mcumgr             # 进入 mcumgr SMP 模式
+```
+
+> **注意**：Shell 传输层适合设备管理（查看镜像、复位、统计等）。固件上传推荐使用方式一（MCUboot 恢复模式），速度更快。
+
+---
+
+## 应用内 mcumgr 配置参考
+
+```ini
+# prj.conf — Shell + mcumgr SMP over Shell
+CONFIG_GPIO=y
+CONFIG_LOG=y
+CONFIG_SHELL=y
+
+# mcumgr 依赖
+CONFIG_NET_BUF=y
+CONFIG_ZCBOR=y
+CONFIG_BASE64=y
+CONFIG_CRC=y
+
+# mcumgr SMP over Shell
+CONFIG_MCUMGR=y
+CONFIG_MCUMGR_TRANSPORT_SHELL=y
+CONFIG_MCUMGR_GRP_IMG=y
+CONFIG_MCUMGR_GRP_OS=y
+CONFIG_MCUMGR_GRP_SHELL=y
+```
+
+> **关键**：`MCUMGR_GRP_XXX` 不是 `MCUMGR_CMD_XXX`；`NET_BUF` 和 `ZCBOR` 是 mcumgr 的必要依赖。
 
 ---
 
@@ -228,12 +275,16 @@ mcumgr --conntype serial --connstring "COM6,baud=115200" reset
 4. **MCUboot 编译必须加 `--sysbuild`**：否则只编译应用不含引导程序
 5. **升级固件必须已签名**：上传 `.signed.bin` 而非未签名的 `.bin`
 6. **签名密钥需一致**：MCUboot 编译和镜像签名必须使用同一密钥
-7. **USART1/USART2 不冲突**：控制台用 USART1，升级用 USART2，互不影响
-8. **无固件自动恢复**：若 slot0 无有效固件，MCUboot 自动进入串口恢复模式
+7. ★ **密钥在 `sysbuild.conf` 中配置**：`SB_CONFIG_BOOT_SIGNATURE_KEY_FILE`，不能只在 `mcuboot.conf` 中设置
+8. **USART1 三合一**：Shell/日志/mcumgr 串口恢复共享 USART1，分时复用无冲突
+9. **无固件自动恢复**：若 slot0 无有效固件，MCUboot 自动进入串口恢复模式
+10. **Shell 和 mcumgr 共存**：通过 Shell 传输层 (`MCUMGR_TRANSPORT_SHELL`)，无 UART 冲突
 
 ## 参考资料
 
 - [stm32l475的mcuboot教程.md](stm32l475的mcuboot教程.md) — 完整 MCUboot 配置教程
 - [MCUboot 官方文档](https://docs.mcuboot.com/)
 - [Zephyr Sysbuild 文档](https://docs.zephyrproject.org/latest/build/sysbuild/)
+- [Zephyr Shell 文档](https://docs.zephyrproject.org/latest/services/shell/index.html)
+- [mcumgr 命令行工具](https://github.com/apache/mynewt-mcumgr-cli)
 - `bootloader/mcuboot/docs/readme-zephyr.md` — MCUboot Zephyr 移植文档

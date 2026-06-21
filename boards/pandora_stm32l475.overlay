@@ -4,11 +4,15 @@
  * 功能:
  *   1. 为绿色 LED 添加便捷别名
  *   2. 定义 Flash 分区 (与 MCUboot 分区布局一致)
+ *   3. 指定应用代码链接分区 (slot0, 0x08010000)
  *
  * 硬件: Pandora STM32L475 IoT Board
+ * 架构: USART1 (PA9/PA10) — 应用 Shell/日志 + MCUboot 串口恢复（分时复用）
+ *       Shell 和 mcumgr SMP 通过 Shell 传输层共存，无冲突
  */
 / {
 	aliases {
+		led0 = &blue_led;
 		/* 绿色 LED 别名，便于代码中通过 DT_ALIAS 引用 */
 		green-led = &green_led;
 	};
@@ -16,6 +20,11 @@
 	chosen {
 		/* ★ 指定应用代码分区 — 应用链接到 slot0 (0x08010000) 而非 Flash 起始 */
 		zephyr,code-partition = &slot0_partition;
+		/*
+		 * USART1 已由板级 DTS 配置为 zephyr,console 和 zephyr,shell-uart
+		 * mcumgr 在应用中通过 Shell 传输层 (CONFIG_MCUMGR_TRANSPORT_SHELL) 工作
+		 * 无需额外的 zephyr,uart-mcumgr chosen 节点
+		 */
 	};
 };
 
@@ -50,7 +59,7 @@
 			reg = <0x00010000 0x38000>;
 		};
 
-		/* 升级镜像暂存槽 (224KB) */
+		/* 升级镜像暂存槽 (224KB) — mcumgr 上传固件写入此槽 */
 		slot1_partition: partition@48000 {
 			label = "image-1";
 			reg = <0x00048000 0x38000>;
