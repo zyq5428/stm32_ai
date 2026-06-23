@@ -168,6 +168,49 @@ Application (含 Shell + mcumgr):
 
 ---
 
+---
+
+## VS Code 一键编译/烧录/调试
+
+项目已配置 `.vscode/` 集成，打开根目录 `zephyrproject/` 即可使用。
+
+### 前置环境
+
+| 组件 | 路径 |
+|------|------|
+| Python 虚拟环境 | `E:/zephyrproject/.venv/` |
+| Zephyr SDK 1.0.1 | `E:/zephyr-sdk-1.0.1/` |
+| OpenOCD (Zephyr SDK 自带) | `E:/zephyr-sdk-1.0.1/hosttools/openocd/` |
+| VS Code 扩展 | Cortex-Debug (`marus25.cortex-debug`) + C/C++ (`ms-vscode.cpptools`) |
+
+### 6 个快捷任务 (`Ctrl+Shift+P` → "Tasks: Run Task")
+
+| 任务名 | 默认快捷键 | 编译标志 | 用途 |
+|--------|-----------|----------|------|
+| **West Build (pandora) auto** | `Ctrl+Shift+B` | `-p auto` | 小文件修改 → 增量编译 |
+| **West Build (pandora) always** | 手动 | `-p always` | 完整清理编译 |
+| **West Build MCUboot (pandora) auto** | 手动 | `-p auto --sysbuild` | MCUboot 增量编译 |
+| **West Build MCUboot (pandora) always** | 手动 | `-p always --sysbuild` | MCUboot 完整编译 |
+| **West Flash (pandora)** | 手动 | — | 一键烧录 |
+| **Launch OpenOCD Server Only** | 手动 | — | 独立调试服务器 |
+
+### 2 个调试配置 (`F5`)
+
+| 配置名 | 功能 |
+|--------|------|
+| **Launch-OpenOCD(stlink)** | 自动编译 → 烧录 → 启动 GDB → 停在 `main()` |
+| **Attach-OpenOCD(stlink)** | 附加到运行中的 MCU（不重新烧录） |
+
+### 日常工作流
+
+```
+修改代码 → Ctrl+Shift+B (增量编译) → F5 (烧录 + 调试)
+                            ↓
+              改 Kconfig/设备树 → 用 "always" 或 "MCUboot always"
+```
+
+---
+
 ## 烧录与运行
 
 ### 烧录

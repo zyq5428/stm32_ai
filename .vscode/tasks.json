@@ -1,0 +1,126 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "West Build (pandora) auto",
+            "type": "shell",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command"
+                    ]
+                }
+            },
+            "command": "E:/zephyrproject/.venv/Scripts/activate.ps1 ; E:/zephyrproject/.venv/Scripts/west.exe build -p auto -b pandora_stm32l475 stm32_ai",
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "West Build (pandora) always",
+            "type": "shell",
+            "group": {
+                "kind": "build"
+            },
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command"
+                    ]
+                }
+            },
+            "command": "E:/zephyrproject/.venv/Scripts/activate.ps1 ; E:/zephyrproject/.venv/Scripts/west.exe build -p always -b pandora_stm32l475 stm32_ai",
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "West Build MCUboot (pandora) auto",
+            "type": "shell",
+            "group": {
+                "kind": "build"
+            },
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command"
+                    ]
+                }
+            },
+            "command": "E:/zephyrproject/.venv/Scripts/activate.ps1 ; E:/zephyrproject/.venv/Scripts/west.exe build -p auto -b pandora_stm32l475 --sysbuild stm32_ai",
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "West Build MCUboot (pandora) always",
+            "type": "shell",
+            "group": {
+                "kind": "build"
+            },
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command"
+                    ]
+                }
+            },
+            "command": "E:/zephyrproject/.venv/Scripts/activate.ps1 ; E:/zephyrproject/.venv/Scripts/west.exe build -p always -b pandora_stm32l475 --sysbuild stm32_ai",
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "West Flash (pandora)",
+            "type": "shell",
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command"
+                    ]
+                }
+            },
+            "command": "E:/zephyrproject/.venv/Scripts/activate.ps1 ; E:/zephyrproject/.venv/Scripts/west.exe flash -d E:/zephyrproject/build",
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "Launch OpenOCD Server Only",
+            "type": "shell",
+            "command": "E:/zephyr-sdk-1.0.1/hosttools/openocd/bin/openocd.exe -s E:/zephyr-sdk-1.0.1/hosttools/openocd/share/openocd/scripts -f interface/stlink.cfg -f target/stm32l4x.cfg",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        }
+    ]
+}

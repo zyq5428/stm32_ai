@@ -1,0 +1,13 @@
+{
+    // Hush CMake: 禁用 CMake Tools 的自动配置，避免与 west 冲突
+    "cmake.configureOnOpen": false,
+    "cmake.buildBeforeRun": false, 
+
+    // IntelliSense: C/C++ 智能感知配置
+    // 指向您的 SDK 1.0.1 中的 GCC 编译器
+    "C_Cpp.default.compilerPath": "E:/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc.exe",
+    
+    // 指向构建生成的 compile_commands.json，它是智能感知的关键
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "iis.configDir": "",
+}

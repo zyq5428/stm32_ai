@@ -1,0 +1,57 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch-OpenOCD(stlink)",
+            "type": "cortex-debug",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+            "servertype": "openocd",
+            "serverpath": "E:/zephyr-sdk-1.0.1/hosttools/openocd/bin/openocd.exe",
+            "gdbPath": "E:/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb-py.exe",
+            "device": "STM32L475VG",
+            "svdFile": "${workspaceFolder}/stm32_ai/svd/STM32L475.svd",
+            "runToEntryPoint": "main",
+            "preLaunchTask": "West Build (pandora) auto",
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32l4x.cfg"
+            ],
+            "searchDir": [
+                "E:/zephyr-sdk-1.0.1/hosttools/openocd/share/openocd/scripts"
+            ],
+            "serverArgs": [
+                "-c",
+                "init; reset init"
+            ],
+            "postLaunchCommands": [
+                "monitor reset halt",
+                "load"
+            ],
+            "showDevDebugOutput": "raw"
+        },
+        {
+            // -----------------------------------------------------------------
+            // 配置 2: Attach-OpenOCD(stlink) - 已修正连接端口
+            // -----------------------------------------------------------------
+            "name": "Attach-OpenOCD(stlink)",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/zephyr/zephyr.elf", 
+            "request": "attach",
+            "type": "cortex-debug",
+            "servertype": "openocd",
+            "gdbPath": "E:/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb-py.exe",
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32l4x.cfg"
+            ],
+            "device": "STM32L475VG",
+            "svdFile": "${workspaceFolder}/stm32_ai/svd/STM32L475.svd",
+            "serverpath": "E:/zephyr-sdk-1.0.1/hosttools/openocd/bin/openocd.exe",
+            "searchDir": [
+                "E:/zephyr-sdk-1.0.1/hosttools/openocd/share/openocd/scripts"
+            ]
+        }
+    ]
+}
