@@ -1,0 +1,10 @@
+# AHT10 temperature and humidity sensor configuration options
+# 参照: aosong/dht20/Kconfig
+
+config AHT10
+	bool "AHT10 Temperature and Humidity Sensor"
+	default y
+	depends on DT_HAS_AOSONG_AHT10_ENABLED
+	select I2C
+	help
+	  Enable driver for AHT10 I2C-based temperature and humidity sensor.

@@ -1,0 +1,10 @@
+# ICM20608 Six-Axis Motion Tracking device configuration options
+# 参照: tdk/mpu6050/Kconfig
+
+menuconfig ICM20608
+	bool "ICM20608 Six-Axis Motion Tracking Device"
+	default y
+	depends on DT_HAS_INVENSENSE_ICM20608_ENABLED
+	select I2C
+	help
+	  Enable driver for ICM20608 I2C-based six-axis motion tracking device.

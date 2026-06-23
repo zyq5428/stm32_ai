@@ -5,11 +5,15 @@
  *   1. 为绿色 LED 添加便捷别名
  *   2. 定义 Flash 分区 (与 MCUboot 分区布局一致)
  *   3. 指定应用代码链接分区 (slot0, 0x08010000)
+ *   4. 配置 GPIO-I2C 软件模拟总线 (AHT10 / AP3216C / ICM20608)
  *
  * 硬件: Pandora STM32L475 IoT Board
  * 架构: USART1 (PA9/PA10) — 应用 Shell/日志 + MCUboot 串口恢复（分时复用）
  *       Shell 和 mcumgr SMP 通过 Shell 传输层共存，无冲突
  */
+
+#include <zephyr/dt-bindings/i2c/i2c.h>
+
 / {
 	aliases {
 		led0 = &blue_led;
@@ -25,6 +29,61 @@
 		 * mcumgr 在应用中通过 Shell 传输层 (CONFIG_MCUMGR_TRANSPORT_SHELL) 工作
 		 * 无需额外的 zephyr,uart-mcumgr chosen 节点
 		 */
+	};
+
+	/*
+	 * [GPIO-I2C 0] 软件模拟 I2C 总线 — SDA=PC1, SCL=PC0
+	 * 设备: AP3216C (0x1E) + ICM20608 (0x68)
+	 *
+	 * 引脚必须配置为开漏输出 (GPIO_OPEN_DRAIN)，
+	 * 依靠外部上拉电阻实现线与逻辑。
+	 */
+	gpio_i2c0: gpio_i2c0 {
+		compatible = "gpio-i2c";
+		status = "okay";
+		sda-gpios = <&gpioc 1 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		scl-gpios = <&gpioc 0 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* AP3216C 环境光/接近传感器 — I2C 地址 0x1E */
+		ap3216c: ap3216c@1e {
+			compatible = "liteon,ap3216c";
+			reg = <0x1e>;
+			status = "okay";
+		};
+
+		/* ICM20608 六轴 IMU — I2C 地址 0x68 */
+		icm20608: icm20608@68 {
+			compatible = "invensense,icm20608";
+			reg = <0x68>;
+			status = "okay";
+		};
+	};
+
+	/*
+	 * [GPIO-I2C 1] 软件模拟 I2C 总线 — SDA=PC1, SCL=PD6
+	 * 设备: AHT10 (0x38)
+	 *
+	 * ★ 注意: AHT10 的 SCL 独立使用 PD6，
+	 *   与其他传感器 (SCL=PC0) 不在同一总线上！
+	 */
+	gpio_i2c1: gpio_i2c1 {
+		compatible = "gpio-i2c";
+		status = "okay";
+		sda-gpios = <&gpioc 1 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		scl-gpios = <&gpiod 6 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* AHT10 温湿度传感器 — I2C 地址 0x38 */
+		aht10: aht10@38 {
+			compatible = "aosong,aht10";
+			reg = <0x38>;
+			status = "okay";
+		};
 	};
 };
 

@@ -1,0 +1,31 @@
+# InvenSense ICM20608 6-axis IMU sensor binding
+#
+# Copyright (c) 2026
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    InvenSense ICM-20608-G 6-axis MEMS motion tracking device.
+    Connected via I2C (default address 0x68) or SPI.
+    Measures 3-axis accelerometer and 3-axis gyroscope data.
+
+compatible: "invensense,icm20608"
+
+include: [sensor-device.yaml, i2c-device.yaml]
+
+properties:
+  accel-fs:
+    type: int
+    default: 2
+    enum: [2, 4, 8, 16]
+    description: Accelerometer full-scale range in g.
+
+  gyro-fs:
+    type: int
+    default: 250
+    enum: [250, 500, 1000, 2000]
+    description: Gyroscope full-scale range in dps.
+
+  smplrt-div:
+    type: int
+    default: 0
+    description: Sample rate divider (sample rate = 1kHz / (1 + smplrt-div)).

@@ -1,0 +1,4 @@
+# Sensor driver configuration options
+rsource "aht10/Kconfig"
+rsource "ap3216c/Kconfig"
+rsource "icm20608/Kconfig"

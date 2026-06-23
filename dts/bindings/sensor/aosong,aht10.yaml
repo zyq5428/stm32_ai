@@ -1,0 +1,13 @@
+# Aosong AHT10 temperature and humidity sensor binding
+#
+# Copyright (c) 2026
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    Aosong AHT10 digital temperature and humidity sensor.
+    Connected via I2C, default address 0x38.
+    Measures temperature (-40°C to +85°C) and humidity (0% to 100% RH).
+
+compatible: "aosong,aht10"
+
+include: [sensor-device.yaml, i2c-device.yaml]

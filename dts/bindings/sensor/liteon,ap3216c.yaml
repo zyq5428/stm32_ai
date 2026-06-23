@@ -1,0 +1,12 @@
+# Liteon AP3216C ambient light and proximity sensor binding
+#
+# Copyright (c) 2026
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    Liteon AP3216C ambient light sensor (ALS), proximity sensor (PS),
+    and infrared sensor (IR). Connected via I2C, default address 0x1E.
+
+compatible: "liteon,ap3216c"
+
+include: [sensor-device.yaml, i2c-device.yaml]
