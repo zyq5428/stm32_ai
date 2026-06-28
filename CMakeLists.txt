@@ -14,6 +14,7 @@ target_sources(app PRIVATE
 	src/aht10_thread.c
 	src/ap3216c_thread.c
 	src/icm20608_thread.c
+	src/display_thread.c
 )
 
 # 添加传感器驱动源文件 — 每个传感器对应独立驱动目录

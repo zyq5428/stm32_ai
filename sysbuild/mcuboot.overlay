@@ -1,30 +1,27 @@
 /*
- * mcuboot.overlay — MCUboot 引导程序设备树覆盖
+ * mcuboot.overlay — MCUboot 引导程序设备树覆盖 (NOR Flash 方案)
  *
  * 功能:
  *   1. 启用 USART1 (PA9/PA10) 作为 mcumgr 串口恢复通道
  *   2. 配置 KEY0 (PD10) 作为串口恢复入口按键
+ *   3. 定义 Flash 分区 — slot1 在外部 NOR Flash (W25Q128)
  *
- * 硬件: Pandora STM32L475 IoT Board
- * 架构: USART1 同时用于 ① 应用 Shell/日志 ② MCUboot 串口恢复
- *       两者分时复用 — MCUboot 仅在上电检测阶段使用 USART1
+ * Flash 布局:
+ *   内部 Flash:  boot (64KB) + slot0 (448KB)
+ *   外部 NOR:    slot1 (448KB)
  */
 
 / {
-	/* [设备树] 别名定义 */
 	aliases {
-		/* KEY0 (PD10=joy_right) 板级 DTS 已定义，直接引用作为串口恢复入口检测按键 */
 		mcuboot-button0 = &joy_right;
 	};
 
-	/* [设备树] 选择节点 */
 	chosen {
-		/* USART1 作为 mcumgr 串口升级专用通道 */
 		zephyr,uart-mcumgr = &usart1;
 	};
 };
 
-/* [设备树] 启用 USART1: PA9(TX) + PA10(RX), 115200 */
+/* USART1: PA9(TX) + PA10(RX), 115200 */
 &usart1 {
 	pinctrl-0 = <&usart1_tx_pa9 &usart1_rx_pa10>;
 	pinctrl-names = "default";
@@ -33,16 +30,8 @@
 };
 
 /*
- * [设备树] Flash 分区定义 — MCUboot Overwrite-Only (Upgrade-Only) 模式
- *
- * STM32L475VET6 内部 Flash: 512KB @ 0x08000000
- * ┌──────────────────┐ 0x08000000
- * │ boot_partition   │ 64KB — MCUboot 引导程序
- * ├──────────────────┤ 0x08010000
- * │ slot0_partition  │ 224KB — 应用程序主镜像
- * ├──────────────────┤ 0x08048000
- * │ slot1_partition  │ 224KB — 升级镜像暂存槽
- * └──────────────────┘ 0x08080000
+ * [Flash 分区] — 必须与应用程序 overlay 完全一致
+ * 内部 Flash: boot (64KB) + slot0 (448KB)
  */
 &flash0 {
 	partitions {
@@ -50,23 +39,29 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-		/* MCUboot 引导程序分区 (64KB) */
 		boot_partition: partition@0 {
 			label = "mcuboot";
 			reg = <0x00000000 0x10000>;
 			read-only;
 		};
 
-		/* 应用程序主镜像槽 (224KB) */
 		slot0_partition: partition@10000 {
 			label = "image-0";
-			reg = <0x00010000 0x38000>;
+			reg = <0x00010000 0x70000>;
 		};
+	};
+};
 
-		/* 升级镜像暂存槽 (224KB) — 串口升级固件先写入此槽 */
-		slot1_partition: partition@48000 {
+/* ★ 外部 NOR Flash W25Q128: slot1 (448KB) */
+&w25q128jv {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		slot1_partition: partition@0 {
 			label = "image-1";
-			reg = <0x00048000 0x38000>;
+			reg = <0x00000000 0x70000>;
 		};
 	};
 };

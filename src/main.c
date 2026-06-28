@@ -8,8 +8,13 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include "sensor_data.h"
+
 /* [日志] 注册 main 模块 */
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
+
+/* [全局] 传感器共享数据实例 — 所有传感器线程写入，显示线程读取 */
+struct sensor_data g_sensor_data;
 
 /* [入口] 主函数 — 只打印信息，业务逻辑交给独立线程 */
 int main(void)

@@ -1,11 +1,13 @@
 /*
  * icm20608_thread.c — ICM20608 六轴 IMU 传感器采集线程
  *
- * 功能: 每 100ms (10Hz) 采集加速度计+陀螺仪并通过日志输出
- * 使用 Zephyr 标准传感器 API
+ * 功能: 每 100ms (10Hz) 采集加速度计+陀螺仪, 写入共享数据结构供显示线程读取
+ *       使用 Zephyr 标准传感器 API
  *
  * 硬件: InvenSense ICM-20608-G (I2C, 0x68)
  * 驱动: drivers/sensor/icm20608/
+ *
+ * 日志: LOG_LEVEL_WRN — 仅输出警告和错误, 不打印常规数值
  */
 
 #include <zephyr/kernel.h>
@@ -13,7 +15,9 @@
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(icm20608_thread, LOG_LEVEL_INF);
+#include "sensor_data.h"
+
+LOG_MODULE_REGISTER(icm20608_thread, LOG_LEVEL_WRN);
 
 #define ICM20608_STACK_SIZE  1024
 #define ICM20608_PRIORITY    14
@@ -43,16 +47,22 @@ void icm20608_thread_entry(void *p1, void *p2, void *p3)
 			sensor_channel_get(dev, SENSOR_CHAN_GYRO_XYZ, gyro);
 			sensor_channel_get(dev, SENSOR_CHAN_DIE_TEMP, &temp);
 
-			LOG_INF("ICM20608 | Acc: X%5d.%03d Y%5d.%03d Z%5d.%03d"
-				" | Gyro: X%5d.%03d Y%5d.%03d Z%5d.%03d"
-				" | T: %d.%03d",
-				accel[0].val1, accel[0].val2 / 1000,
-				accel[1].val1, accel[1].val2 / 1000,
-				accel[2].val1, accel[2].val2 / 1000,
-				gyro[0].val1, gyro[0].val2 / 1000,
-				gyro[1].val1, gyro[1].val2 / 1000,
-				gyro[2].val1, gyro[2].val2 / 1000,
-				temp.val1, temp.val2 / 1000);
+			/* [共享] 写入全局传感器数据结构 */
+			k_mutex_lock(&g_sensor_data.lock, K_FOREVER);
+			g_sensor_data.accel_x_v1 = accel[0].val1;
+			g_sensor_data.accel_x_v2 = accel[0].val2;
+			g_sensor_data.accel_y_v1 = accel[1].val1;
+			g_sensor_data.accel_y_v2 = accel[1].val2;
+			g_sensor_data.accel_z_v1 = accel[2].val1;
+			g_sensor_data.accel_z_v2 = accel[2].val2;
+			g_sensor_data.gyro_x_v1  = gyro[0].val1;
+			g_sensor_data.gyro_x_v2  = gyro[0].val2;
+			g_sensor_data.gyro_y_v1  = gyro[1].val1;
+			g_sensor_data.gyro_y_v2  = gyro[1].val2;
+			g_sensor_data.gyro_z_v1  = gyro[2].val1;
+			g_sensor_data.gyro_z_v2  = gyro[2].val2;
+			g_sensor_data.icm20608_valid = true;
+			k_mutex_unlock(&g_sensor_data.lock);
 		} else {
 			LOG_ERR("ICM20608: read error (ret=%d)", ret);
 		}

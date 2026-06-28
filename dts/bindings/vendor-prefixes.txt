@@ -1,1 +1,2 @@
 liteon	Liteon Technology Corporation
+custom	Custom vendor for training

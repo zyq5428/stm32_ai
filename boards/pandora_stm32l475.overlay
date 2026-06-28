@@ -3,41 +3,39 @@
  *
  * 功能:
  *   1. 为绿色 LED 添加便捷别名
- *   2. 定义 Flash 分区 (与 MCUboot 分区布局一致)
+ *   2. 定义 Flash 分区 — slot1 移到外部 NOR Flash (W25Q128), slot0 扩大到 448KB
  *   3. 指定应用代码链接分区 (slot0, 0x08010000)
  *   4. 配置 GPIO-I2C 软件模拟总线 (AHT10 / AP3216C / ICM20608)
  *
  * 硬件: Pandora STM32L475 IoT Board
  * 架构: USART1 (PA9/PA10) — 应用 Shell/日志 + MCUboot 串口恢复（分时复用）
  *       Shell 和 mcumgr SMP 通过 Shell 传输层共存，无冲突
+ *
+ * Flash 布局 (NOR Flash 方案):
+ *   内部 Flash (512KB):
+ *     boot_partition:  64KB @ 0x08000000
+ *     slot0_partition: 448KB @ 0x08010000 (应用主镜像, 空间最大化)
+ *   外部 NOR Flash W25Q128 (16MB):
+ *     slot1_partition: 448KB @ 0x00000000 (升级暂存槽)
  */
 
 #include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/display/panel.h>
 
 / {
 	aliases {
 		led0 = &blue_led;
-		/* 绿色 LED 别名，便于代码中通过 DT_ALIAS 引用 */
 		green-led = &green_led;
 	};
 
 	chosen {
-		/* ★ 指定应用代码分区 — 应用链接到 slot0 (0x08010000) 而非 Flash 起始 */
+		/* ★ 指定应用代码分区 — 应用链接到 slot0 (0x08010000) */
 		zephyr,code-partition = &slot0_partition;
-		/*
-		 * USART1 已由板级 DTS 配置为 zephyr,console 和 zephyr,shell-uart
-		 * mcumgr 在应用中通过 Shell 传输层 (CONFIG_MCUMGR_TRANSPORT_SHELL) 工作
-		 * 无需额外的 zephyr,uart-mcumgr chosen 节点
-		 */
+		/* ★ LVGL 显示设备 */
+		zephyr,display = &display;
 	};
 
-	/*
-	 * [GPIO-I2C 0] 软件模拟 I2C 总线 — SDA=PC1, SCL=PC0
-	 * 设备: AP3216C (0x1E) + ICM20608 (0x68)
-	 *
-	 * 引脚必须配置为开漏输出 (GPIO_OPEN_DRAIN)，
-	 * 依靠外部上拉电阻实现线与逻辑。
-	 */
+	/* [GPIO-I2C 0] SDA=PC1, SCL=PC0 — AP3216C (0x1E) + ICM20608 (0x68) */
 	gpio_i2c0: gpio_i2c0 {
 		compatible = "gpio-i2c";
 		status = "okay";
@@ -47,14 +45,12 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		/* AP3216C 环境光/接近传感器 — I2C 地址 0x1E */
 		ap3216c: ap3216c@1e {
 			compatible = "liteon,ap3216c";
 			reg = <0x1e>;
 			status = "okay";
 		};
 
-		/* ICM20608 六轴 IMU — I2C 地址 0x68 */
 		icm20608: icm20608@68 {
 			compatible = "invensense,icm20608";
 			reg = <0x68>;
@@ -62,13 +58,7 @@
 		};
 	};
 
-	/*
-	 * [GPIO-I2C 1] 软件模拟 I2C 总线 — SDA=PC1, SCL=PD6
-	 * 设备: AHT10 (0x38)
-	 *
-	 * ★ 注意: AHT10 的 SCL 独立使用 PD6，
-	 *   与其他传感器 (SCL=PC0) 不在同一总线上！
-	 */
+	/* [GPIO-I2C 1] SDA=PC1, SCL=PD6 — AHT10 (0x38) */
 	gpio_i2c1: gpio_i2c1 {
 		compatible = "gpio-i2c";
 		status = "okay";
@@ -78,26 +68,72 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		/* AHT10 温湿度传感器 — I2C 地址 0x38 */
 		aht10: aht10@38 {
 			compatible = "aosong,aht10";
 			reg = <0x38>;
 			status = "okay";
 		};
 	};
+
+	/*
+	 * [MIPI-DBI-SPI 桥 + ST7789V 显示]
+	 *
+	 * 硬件连接 (SPI3):
+	 *   SCK=PB3, MOSI=PB5, CS=PD7, DC=PB4, RST=PB6, BL=PB7
+	 */
+	mipi_dbi: mipi-dbi {
+		compatible = "zephyr,mipi-dbi-spi";
+		dc-gpios = <&gpiob 4 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpiob 6 GPIO_ACTIVE_LOW>;
+		spi-dev = <&spi3>;
+		write-only;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		display: st7789v@0 {
+			compatible = "sitronix,st7789v";
+			reg = <0>;
+			mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
+			mipi-max-frequency = <20000000>;
+			width = <240>; height = <240>;
+			x-offset = <0>; y-offset = <0>;
+			pixel-format = <PANEL_PIXEL_FORMAT_RGB_565>;
+			vcom = <0x19>; gctrl = <0x35>;
+			vrhs = <0x12>; vdvs = <0x20>;
+			mdac = <0x00>; gamma = <0x01>; lcm = <0x2C>;
+			porch-param = [0c 0c 00 33 33];
+			cmd2en-param = [5a 69 02 01];
+			pwctrl1-param = [a4 a1];
+			pvgam-param = [d0 04 0d 11 13 2b 3f 54 4c 18 0d 0b 1f 23];
+			nvgam-param = [d0 04 0c 11 13 2c 3f 44 51 2f 1f 1f 20 23];
+			ram-param = [00 F0];
+			rgb-param = [CD 08 14];
+		};
+	};
+};
+
+/* [SPI3] LCD 通信 — SCK=PB3, MOSI=PB5, CS=PD7 */
+&spi3 {
+	status = "okay";
+	pinctrl-0 = <&spi3_sck_pb3 &spi3_mosi_pb5>;
+	pinctrl-names = "default";
+	cs-gpios = <&gpiod 7 GPIO_ACTIVE_LOW>;
 };
 
 /*
- * [设备树] Flash 分区定义 — 与 MCUboot Overwrite-Only 模式一致
+ * [Flash 分区] NOR Flash 方案
  *
- * STM32L475VET6 内部 Flash: 512KB @ 0x08000000
+ * 内部 Flash (512KB):
  * ┌──────────────────┐ 0x08000000
- * │ boot_partition   │ 64KB — MCUboot 引导程序
+ * │ boot_partition   │ 64KB
  * ├──────────────────┤ 0x08010000
- * │ slot0_partition  │ 224KB — 应用程序主镜像 (本应用)
- * ├──────────────────┤ 0x08048000
- * │ slot1_partition  │ 224KB — 升级镜像暂存槽
+ * │ slot0_partition  │ 448KB (空间最大化)
  * └──────────────────┘ 0x08080000
+ *
+ * 外部 NOR Flash W25Q128 (16MB):
+ * ┌──────────────────┐ 0x00000000
+ * │ slot1_partition  │ 448KB (与 slot0 大小一致)
+ * └──────────────────┘
  */
 &flash0 {
 	partitions {
@@ -105,23 +141,29 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-		/* MCUboot 引导程序分区 (64KB) */
 		boot_partition: partition@0 {
 			label = "mcuboot";
 			reg = <0x00000000 0x10000>;
 			read-only;
 		};
 
-		/* 应用程序主镜像槽 (224KB) */
 		slot0_partition: partition@10000 {
 			label = "image-0";
-			reg = <0x00010000 0x38000>;
+			reg = <0x00010000 0x70000>;
 		};
+	};
+};
 
-		/* 升级镜像暂存槽 (224KB) — mcumgr 上传固件写入此槽 */
-		slot1_partition: partition@48000 {
+/* ★ slot1 移到外部 NOR Flash W25Q128 */
+&w25q128jv {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		slot1_partition: partition@0 {
 			label = "image-1";
-			reg = <0x00048000 0x38000>;
+			reg = <0x00000000 0x70000>;
 		};
 	};
 };

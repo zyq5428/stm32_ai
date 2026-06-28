@@ -1,11 +1,13 @@
 /*
  * aht10_thread.c — AHT10 温湿度传感器采集线程
  *
- * 功能: 每 2 秒采集一次温湿度并通过日志输出
+ * 功能: 每 2 秒采集一次温湿度, 写入共享数据结构供显示线程读取
  * 使用 Zephyr 标准传感器 API (sensor_sample_fetch + sensor_channel_get)
  *
  * 硬件: Aosong AHT10 (I2C, 0x38)
  * 驱动: drivers/sensor/aht10/
+ *
+ * 日志: LOG_LEVEL_WRN — 仅输出警告和错误, 不打印常规数值
  */
 
 #include <zephyr/kernel.h>
@@ -13,7 +15,9 @@
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(aht10_thread, LOG_LEVEL_INF);
+#include "sensor_data.h"
+
+LOG_MODULE_REGISTER(aht10_thread, LOG_LEVEL_WRN);
 
 /* 线程参数 */
 #define AHT10_STACK_SIZE  1024
@@ -44,11 +48,16 @@ void aht10_thread_entry(void *p1, void *p2, void *p3)
 			sensor_channel_get(dev, SENSOR_CHAN_AMBIENT_TEMP, &temp);
 			sensor_channel_get(dev, SENSOR_CHAN_HUMIDITY, &humidity);
 
-			LOG_INF("AHT10 | Temp: %d.%06d C | Hum: %d.%06d %%",
-				temp.val1, temp.val2,
-				humidity.val1, humidity.val2);
+			/* [共享] 写入全局传感器数据结构 */
+			k_mutex_lock(&g_sensor_data.lock, K_FOREVER);
+			g_sensor_data.temp_val1 = temp.val1;
+			g_sensor_data.temp_val2 = temp.val2;
+			g_sensor_data.hum_val1  = humidity.val1;
+			g_sensor_data.hum_val2  = humidity.val2;
+			g_sensor_data.aht10_valid = true;
+			k_mutex_unlock(&g_sensor_data.lock);
 		} else if (ret == -EBUSY) {
-			LOG_WRN("AHT10: busy, retry next cycle");
+			LOG_WRN("AHT10: busy");
 		} else {
 			LOG_ERR("AHT10: fetch error (ret=%d)", ret);
 		}
