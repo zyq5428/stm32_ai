@@ -1,24 +1,32 @@
 /*
- * mcuboot.overlay — MCUboot 引导程序设备树覆盖 (NOR Flash 方案)
+ * mcuboot.overlay — MCUboot 引导程序设备树覆盖 (NOR Flash 方案, 无按键入口)
  *
  * 功能:
- *   1. 启用 USART1 (PA9/PA10) 作为 mcumgr 串口恢复通道
- *   2. 配置 KEY0 (PD10) 作为串口恢复入口按键
- *   3. 定义 Flash 分区 — slot1 在外部 NOR Flash (W25Q128)
+ *   1. 启用 USART1 (PA9/PA10) 作为 mcumgr 串口恢复通道（应急恢复）
+ *   2. 定义 Flash 分区 — slot1 在外部 NOR Flash (W25Q128), indirect 模式
+ *
+ * 升级流程（无按键）:
+ *   应用层 mcumgr 上传 .signed.bin → 写入 slot1 (NOR Flash) → 标记 pending →
+ *   重启 → MCUboot 检测 pending 镜像 → slot1→slot0 覆写 → 启动新固件
  *
  * Flash 布局:
  *   内部 Flash:  boot (64KB) + slot0 (448KB)
- *   外部 NOR:    slot1 (448KB)
+ *   外部 NOR:    slot1 (448KB), QSPI indirect 模式（不开 MEMMAP）
  */
 
 / {
-	aliases {
-		mcuboot-button0 = &joy_right;
-	};
-
 	chosen {
 		zephyr,uart-mcumgr = &usart1;
 	};
+};
+
+/* [DMA] QSPI NOR Flash 依赖 DMA 进行读写传输 */
+&dma1 {
+	status = "okay";
+};
+
+&dma2 {
+	status = "okay";
 };
 
 /* USART1: PA9(TX) + PA10(RX), 115200 */

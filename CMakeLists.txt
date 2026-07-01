@@ -14,7 +14,8 @@ target_sources(app PRIVATE
 	src/aht10_thread.c
 	src/ap3216c_thread.c
 	src/icm20608_thread.c
-	src/display_thread.c
+	# src/display_thread.c  # ★ LVGL 暂时关闭
+	src/norflash_thread.c   # ★ NOR Flash 自检 + QSPI 复位
 )
 
 # 添加传感器驱动源文件 — 每个传感器对应独立驱动目录

@@ -3,15 +3,19 @@
  *
  * 功能:
  *   1. 为绿色 LED 添加便捷别名
- *   2. 定义 Flash 分区 — slot1 移到外部 NOR Flash (W25Q128), slot0 扩大到 448KB
+ *   2. 定义 Flash 分区 — slot1 在外部 NOR Flash (W25Q128), slot0 448KB
  *   3. 指定应用代码链接分区 (slot0, 0x08010000)
  *   4. 配置 GPIO-I2C 软件模拟总线 (AHT10 / AP3216C / ICM20608)
  *
  * 硬件: Pandora STM32L475 IoT Board
- * 架构: USART1 (PA9/PA10) — 应用 Shell/日志 + MCUboot 串口恢复（分时复用）
+ * 架构: USART1 (PA9/PA10) — 应用 Shell/日志 + mcumgr SMP（分时复用）
  *       Shell 和 mcumgr SMP 通过 Shell 传输层共存，无冲突
  *
- * Flash 布局 (NOR Flash 方案):
+ * ★ 串口升级方案（无按键）:
+ *   应用层 mcumgr 接收固件 → 写入 slot1 (NOR Flash, QSPI indirect 模式) →
+ *   标记 pending → 重启 → MCUboot 覆写 slot1→slot0 → 启动新固件
+ *
+ * Flash 布局 (NOR Flash 方案, QSPI indirect 模式, 不开 MEMMAP):
  *   内部 Flash (512KB):
  *     boot_partition:  64KB @ 0x08000000
  *     slot0_partition: 448KB @ 0x08010000 (应用主镜像, 空间最大化)
@@ -110,6 +114,15 @@
 			rgb-param = [CD 08 14];
 		};
 	};
+};
+
+/* [DMA] QSPI NOR Flash 和 SPI 通信依赖 */
+&dma1 {
+	status = "okay";
+};
+
+&dma2 {
+	status = "okay";
 };
 
 /* [SPI3] LCD 通信 — SCK=PB3, MOSI=PB5, CS=PD7 */
