@@ -62,6 +62,19 @@ cd E:\zephyrproject\ && .\.venv\scripts\Activate.ps1 && west build -p always -b 
 
 禁止直接调用 gcc/openocd 等底层工具。
 
+### Zephyr menuconfig 配置菜单
+
+```powershell
+# 启动 Kconfig 图形化配置界面（在应用目录下执行）
+cd E:\zephyrproject\ && .\.venv\scripts\Activate.ps1 && west build -b pandora_stm32l475 -t menuconfig .\stm32_ai
+
+# 带 MCUboot 的 Sysbuild 版本（配置引导程序 + 应用）
+cd E:\zephyrproject\ && .\.venv\scripts\Activate.ps1 && west build -b pandora_stm32l475 --sysbuild -t menuconfig .\stm32_ai
+```
+
+> **menuconfig 用途**：可视化浏览/搜索/修改 Kconfig 选项，查看依赖关系和帮助文档。
+> 退出时选择 `<Yes>` 保存到 `build/zephyr/.config`，后续编译自动使用。
+
 ## VS Code 集成 — 一键编译/烧录/调试
 
 工作区根目录 `.vscode/` 已配置好三个核心文件，按 `Ctrl+Shift+B` 编译，`Ctrl+Shift+D` 调试。
@@ -148,7 +161,7 @@ cd E:\zephyrproject\ && .\.venv\scripts\Activate.ps1 && west build -p always -b 
 - 用 .overlay 覆盖，不改 Zephyr 源码
 - 用 pinctrl 配置引脚复用
 - 注意 I2C 冲突 + LED 共阳极
-- **MCUboot overlay 必须同时定义**: USART1 + Flash 分区 (slot1 在 NOR Flash 上)
+- **MCUboot overlay 必须同时定义**: USART2 + GPIO 按键 + Flash 分区
 
 ### 编写代码
 
@@ -368,6 +381,9 @@ CONFIG_MCUMGR_GRP_SHELL=y # Shell 管理（远程执行 Shell 命令）
 
 > **关键 Kconfig 命名**：mcumgr 管理组使用 `MCUMGR_GRP_XXX`（如 `MCUMGR_GRP_IMG`），不是 `MCUMGR_CMD_XXX`。
 
+> **mcumgr 在应用中的使用**：连接 USART1 Shell → 输入 `mcumgr` 命令进入 SMP 模式 → 通过 Shell 传输 SMP 帧。
+> 固件升级推荐使用 MCUboot 串口恢复模式（按住 KEY0 + 按 RESET），`mcumgr --conntype serial` 直接操作。
+
 ### 烧录
 
 ```powershell
@@ -381,7 +397,7 @@ west flash
 
 1. 连接 USART1 (PA9/PA10, ST-Link VCP) 到 PC，115200 baud
 2. 设备正常运行中，Shell 可用
-3. 使用 mcumgr 通过串口操作：
+3. 使用 mcumgr 通过串口操作（应用内 mcumgr 或 MCUboot 恢复模式均可）：
 
 ```powershell
 # COM 端口号根据实际情况替换（Windows 设备管理器查看 STMicroelectronics STLink Virtual COM Port）
@@ -414,7 +430,7 @@ mcumgr --conntype serial --connstring "COM6,baud=115200" reset
 # ⑥ 新固件启动后，确认版本可用
 mcumgr --conntype serial --connstring "COM6,baud=115200" image confirm
 # ★ 在 overwrite-only 模式下，image confirm 有时会被 MCUboot 自动处理
-#    但手动 confirm 更安全可靠
+#    但手动 confirm 更安全可靠，确保下次启动不会再次执行 overwrite
 ```
 
 **应急串口恢复（slot0 无有效固件时）：**
@@ -443,6 +459,236 @@ mcumgr --conntype serial --connstring "COM6,baud=115200" image confirm
 | QSPI 初始化失败 (MCUboot 和 App 双启动) | MCUboot 先初始化 QSPI, App 设备框架跳过 init | 应用层手动调用 QSPI init 函数（详见 norflash_thread.c 模板） |
 | `image upload` 失败 / slot1 不可写 | slot1 分区定义错误或 NOR Flash 未正确初始化 | 检查两处 overlay 中 `&w25q128jv` 分区定义 + QSPI pinmux |
 
+## LVGL + ST7789V LCD 显示配置
+
+### 概述
+
+Pandora 板使用 **ST7789V 240x240 LCD**，通过 **MIPI-DBI-SPI 桥 (SPI3)** 驱动。
+
+| 参数 | 值 |
+|------|-----|
+| 显示驱动 | ST7789V (sitronix,st7789v) |
+| 接口 | MIPI-DBI-SPI 4-Wire (SPI3) |
+| 分辨率 | 240×240 |
+| 像素格式 | RGB565 (16-bit) |
+| 背光 | PB7 GPIO |
+| SPI 引脚 | SCK=PB3, MOSI=PB5, CS=PD7, DC=PB4, RST=PB6 |
+| LVGL 版本 | v9.x (Zephyr 内置模块) |
+
+### 设备树 Overlay 模板 (ST7789V via MIPI-DBI-SPI)
+
+```dts
+#include <zephyr/dt-bindings/display/panel.h>
+
+/ {
+    chosen {
+        zephyr,display = &st7789v;  /* ★ LVGL 显示设备 */
+    };
+
+    mipi-dbi-spi {
+        compatible = "zephyr,mipi-dbi-spi";
+        spi-dev = <&spi3>;
+        dc-gpios = <&gpiob 4 GPIO_ACTIVE_HIGH>;
+        reset-gpios = <&gpiob 6 GPIO_ACTIVE_LOW>;
+        write-only;
+        status = "okay";
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        st7789v: st7789v@0 {
+            compatible = "sitronix,st7789v";
+            status = "okay";
+            mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
+            mipi-max-frequency = <20000000>;
+            reg = <0>;
+            width = <240>; height = <240>;
+            x-offset = <0>; y-offset = <0>;
+            pixel-format = <PANEL_PIXEL_FORMAT_RGB_565>;
+            vcom = <0x19>; gctrl = <0x35>;
+            vrhs = <0x12>; vdvs = <0x20>;
+            mdac = <0x00>; gamma = <0x01>; lcm = <0x2C>;
+            porch-param = [0c 0c 00 33 33];
+            cmd2en-param = [5a 69 02 01];
+            pwctrl1-param = [a4 a1];
+            pvgam-param = [d0 04 0d 11 13 2b 3f 54 4c 18 0d 0b 1f 23];
+            nvgam-param = [d0 04 0c 11 13 2c 3f 44 51 2f 1f 1f 20 23];
+            ram-param = [00 F0];
+            rgb-param = [CD 08 14];
+        };
+    };
+};
+
+/* SPI3: SCK=PB3, MOSI=PB5, CS=PD7 */
+&spi3 {
+    status = "okay";
+    pinctrl-0 = <&spi3_sck_pb3 &spi3_mosi_pb5>;
+    pinctrl-names = "default";
+    cs-gpios = <&gpiod 7 GPIO_ACTIVE_LOW>;
+};
+```
+
+### prj.conf — LVGL + Display 最小配置
+
+```ini
+# === 显示子系统 ===
+CONFIG_DISPLAY=y
+CONFIG_SPI=y
+
+# === LVGL 图形库 ===
+CONFIG_LVGL=y
+CONFIG_LV_COLOR_DEPTH_16=y        # RGB565
+CONFIG_LV_Z_BITS_PER_PIXEL=16
+CONFIG_LV_COLOR_16_SWAP=y         # ★ ST7789V 必须开启字节交换
+
+# === 内存优化 — LVGL 内存池和显存放 SRAM1 (32KB), 释放 SRAM0 ===
+CONFIG_LV_Z_MEM_POOL_SIZE=16384   # 16KB 内存池
+CONFIG_LV_Z_MEMORY_POOL_ZEPHYR_REGION=y
+CONFIG_LV_Z_MEMORY_POOL_ZEPHYR_REGION_NAME="SRAM1"
+CONFIG_LV_Z_VDB_SIZE=10           # 10% 屏幕缓冲
+CONFIG_LV_Z_VDB_ZEPHYR_REGION=y
+CONFIG_LV_Z_VDB_ZEPHYR_REGION_NAME="SRAM1"
+
+# === 字体 ===
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+```
+
+> ★ **内存优化关键**: Pandora 仅 128KB SRAM (SRAM0=96KB + SRAM1=32KB)。
+> 将 LVGL 内存池 (16KB) 和绘图缓冲区 (~12KB) 放到 SRAM1，SRAM0 留给应用代码和线程栈。
+> 典型编译结果: FLASH ~398KB / 448KB, SRAM0 ~53KB / 96KB, SRAM1 ~28KB / 32KB。
+
+### display_thread.c 模板 (参照 stm32_app 流程)
+
+```c
+/*
+ * display_thread.c — LVGL LCD 显示线程
+ *
+ * ★ LVGL 通过 CONFIG_LV_Z_AUTO_INIT=y 自动初始化, 本线程不调用 lvgl_init()
+ */
+
+/* [头文件] Zephyr 内核、GPIO、显示驱动和日志 */
+#include <zephyr/kernel.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/display.h>
+#include <zephyr/logging/log.h>
+#include <lvgl.h>
+
+/* [日志] 注册 display_thread 模块 */
+LOG_MODULE_REGISTER(display_thread, LOG_LEVEL_INF);
+
+/* [设备树] 显示设备 */
+static const struct device *display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+
+/**
+ * @brief 显示线程入口函数
+ *
+ * 流程 (参照 stm32_app):
+ *   1. 等待驱动就绪 → 2. 检查显示设备 → 3. 开启显示
+ *   → 4. 开启背光 → 5. 构建 UI → 6. 创建刷新 timer → 7. LVGL 主循环
+ *
+ * ★ 不调用 lvgl_init() — LVGL 已通过 CONFIG_LV_Z_AUTO_INIT=y 自动初始化
+ */
+void display_thread_entry(void *p1, void *p2, void *p3)
+{
+    int ret;
+    k_msleep(500);  /* 等待 SPI/MIPI-DBI/ST7789V 驱动就绪 */
+
+    LOG_INF("Display Thread started");
+
+    if (!device_is_ready(display_dev)) {
+        LOG_ERR("Display device not ready");
+        return;
+    }
+
+    /* 开启显示面板 */
+    ret = display_blanking_off(display_dev);
+    if (ret < 0) { LOG_ERR("Display ON failed: %d", ret); return; }
+
+    /* 背光 PB7 */
+    const struct device *gpiob = DEVICE_DT_GET(DT_NODELABEL(gpiob));
+    if (device_is_ready(gpiob)) {
+        gpio_pin_configure(gpiob, 7, GPIO_OUTPUT_ACTIVE);
+        gpio_pin_set_raw(gpiob, 7, 1);
+    }
+
+    /* 构建 UI 界面 */
+    /* ... lv_obj_create / lv_label_create ... */
+
+    /* 主循环 */
+    while (1) {
+        lv_timer_handler();
+        k_msleep(30);
+    }
+}
+
+/* [线程配置] 栈大小和优先级 */
+#define DISPLAY_STACK_SIZE 8192  /* 线程栈大小（单位：字节） */
+#define DISPLAY_PRIORITY    10   /* 线程优先级（数字越大优先级越低） */
+
+K_THREAD_DEFINE(display_thread_tid, DISPLAY_STACK_SIZE,
+        display_thread_entry, NULL, NULL, NULL,
+        DISPLAY_PRIORITY, 0, 0);
+```
+
+> ★ **关键规则**:
+> 1. **不调用 `lvgl_init()`** — CONFIG_LV_Z_AUTO_INIT=y 自动完成
+> 2. **栈和优先级 `#define` 放在 K_THREAD_DEFINE 紧前面** — 参照 led_thread.c 模板
+> 3. **所有 LVGL API 调用在同一线程上下文** — 单线程驱动，无需加锁
+> 4. **`lv_timer_handler()` 在主循环中调用** — LVGL v9 API (不是 v8 的 `lv_task_handler()`)
+
+## NOR Flash W25Q128 多分区优化
+
+### 概述
+
+W25Q128 (16MB) 除了存放 MCUboot slot1 (448KB) 外，剩余空间可规划为系统区、用户数据区、文件系统区。
+
+### 完整分区方案 (在应用 overlay 中定义)
+
+```
+外部 NOR Flash W25Q128 (16MB):
+┌──────────────────────┐ 0x00000000
+│ slot1_partition      │ 448KB   — MCUboot 升级暂存槽 (image-1)
+├──────────────────────┤ 0x00070000
+│ rtos_sys_partition   │ 1MB     — RTOS 系统/备份区
+├──────────────────────┤ 0x00170000
+│ user_raw_partition   │ 2MB     — 用户裸数据区
+├──────────────────────┤ 0x00370000
+│ storage_partition    │ 12.6MB  — LittleFS 文件系统
+└──────────────────────┘ 0x01000000
+```
+
+```dts
+&w25q128jv {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        slot1_partition: partition@0 {
+            label = "image-1";
+            reg = <0x00000000 0x70000>;
+        };
+        rtos_sys_partition: partition@70000 {
+            label = "rtos-system";
+            reg = <0x00070000 0x100000>;
+        };
+        user_raw_partition: partition@170000 {
+            label = "user-raw";
+            reg = <0x00170000 0x200000>;
+        };
+        storage_partition: partition@370000 {
+            label = "storage";
+            reg = <0x00370000 0xC90000>;
+        };
+    };
+};
+```
+
+> ★ **注意**: MCUboot 的 overlay (`sysbuild/mcuboot.overlay`) 只需 slot1_partition。
+> 其余分区仅在应用层 overlay 中定义。两处 overlay 的 slot1_partition 必须完全一致 (偏移+大小)。
+
 ## 外设快速索引
 
 | 外设 | 参考文件 |
@@ -468,7 +714,9 @@ mcumgr --conntype serial --connstring "COM6,baud=115200" image confirm
 - LED/GPIO/按键 → 必须创建独立线程文件（如 led_thread.c），main.c 仅打印信息
 - 串口/UART → UART 示例
 - I2C/传感器 → I2C 示例（注意 SDA 冲突）
-- SPI/LCD → SPI 示例
+- SPI/LCD → SPI 示例 + LVGL 显示配置 (ST7789V, MIPI-DBI-SPI, SRAM1 内存优化)
+- LVGL/显示/LCD → 参照上方 "LVGL + ST7789V LCD 显示配置" 章节
+- 传感器/温湿度/IMU/环境光 → 传感器线程 + 共享数据结构 (mutex 保护)
 - PWM/呼吸灯/电机 → PWM 示例
 - MCUboot/引导程序 → 生成 sysbuild 三件套 (sysbuild.conf + mcuboot.conf + mcuboot.overlay)
 - 串口升级/串口恢复 → 启用 CONFIG_MCUBOOT_SERIAL + USART1（应用层 mcumgr 触发，无需按键）
@@ -510,3 +758,9 @@ mcumgr --conntype serial --connstring "COM6,baud=115200" image confirm
 25. ★ NOR Flash 方案绝对不开 `CONFIG_STM32_MEMMAP` — STM32L4 QUADSPI 单控制逻辑，indirect/MEMMAP 互斥
 26. ★ slot1 在外部 NOR Flash 时，应用和 MCUboot 两处 overlay 中 slot1 都定义在 `&w25q128jv` 节点上
 27. ★ Overwrite-Only 升级流程：`image upload` → `image test <hash>` → `reset` → `image confirm`（4 步，缺一不可）
+28. ★ LVGL 不手动调用 `lvgl_init()` — `CONFIG_LV_Z_AUTO_INIT=y` 自动初始化，线程中直接 `display_blanking_off()` + 构建 UI
+29. ★ display_thread 栈和优先级 `#define` 必须放在 `K_THREAD_DEFINE` 紧前面 — 参照 led_thread.c 模板格式
+30. ★ LVGL 内存池和 VDB 缓冲区放到 SRAM1 — 使用 `CONFIG_LV_Z_*_ZEPHYR_REGION=y` + `_REGION_NAME="SRAM1"`
+31. ★ ST7789V RGB565 必须开启 `CONFIG_LV_COLOR_16_SWAP=y` — 否则颜色完全错误
+32. ★ 线程入口函数签名必须是 `void xxx_thread_entry(void *p1, void *p2, void *p3)` — K_THREAD_DEFINE 要求
+33. ★ LVGL v9 主循环用 `lv_timer_handler()` — 不是 v8 的 `lv_task_handler()`

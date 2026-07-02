@@ -1,11 +1,15 @@
 /*
- * display_thread.c — LVGL LCD 传感器数据显示
+ * display_thread.c — LVGL 动效验证 (四球公转 + 脉冲中心 + 轨道环)
  *
- * 架构: LVGL auto-init + 单线程驱动
- * CONFIG_LV_COLOR_16_SWAP=y → lv_conf.h 桥接 → LV_COLOR_16_SWAP
- * 所有 LVGL API 调用都在本线程上下文, 无需加锁
+ * 功能: 验证 LVGL + ST7789V + MIPI-DBI-SPI 显示通路的动画渲染能力
+ * 硬件: Pandora STM32L475 IoT Board
+ * 显示: ST7789V 240x240 (SPI3)
+ * 背光: PB7 GPIO
+ *
+ * ★ LVGL 通过 CONFIG_LV_Z_AUTO_INIT=y 自动初始化, 本线程不调用 lvgl_init()
  */
 
+/* [头文件] Zephyr 内核、GPIO、显示驱动和日志 */
 #include <zephyr/kernel.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
@@ -13,189 +17,216 @@
 #include <zephyr/logging/log.h>
 
 #include <lvgl.h>
-#include "sensor_data.h"
+#include <math.h>
 
+/* [日志] 注册 display_thread 模块 */
 LOG_MODULE_REGISTER(display_thread, LOG_LEVEL_INF);
 
-/* 线程栈/优先级/刷新周期 */
-#define STACK   6144
-#define PRIO    10
-#define REFRESH 500
+/* [设备树] 显示设备 */
+static const struct device *display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 
-/* UI控件句柄 */
-static lv_obj_t *lt, *lh, *la, *li, *lp, *lax[3], *lgx[3];
+/* [常量] 屏幕中心坐标 (240×240 → 中心 = 120,120) */
+#define SCR_CX 120
+#define SCR_CY 120
 
-/* ---- 传感器数值格式化 ---- */
-static void fv(char *b, size_t sz, int32_t v1, int32_t v2) {
-	int32_t d = v2 / 100000; if (d < 0) d = -d;
-	snprintf(b, sz, (v1 < 0 || (v1 == 0 && v2 < 0)) ? "-%d.%01ld" : "%d.%01ld",
-		v1 < 0 ? -(int)v1 : (int)v1, (long)d);
-}
-static void fi(char *b, size_t sz, int32_t v1) { snprintf(b, sz, "%d", v1); }
+/* [对象] 四颗轨道小球指针 */
+static lv_obj_t *ball_r;   /* 红色 — 内轨道 (r=40) */
+static lv_obj_t *ball_g;   /* 绿色 — 中内轨道 (r=55) */
+static lv_obj_t *ball_b;   /* 蓝色 — 中外轨道 (r=70) */
+static lv_obj_t *ball_y;   /* 黄色 — 外轨道 (r=85) */
 
-/* ---- UI构建函数 ---- */
-static lv_obj_t *mk_t(lv_obj_t *p) {
-	lv_obj_t *b = lv_obj_create(p);
-	lv_obj_set_size(b, LV_PCT(100), 26);
-	lv_obj_set_style_bg_color(b, lv_color_hex(0x102040), 0);
-	lv_obj_set_style_border_width(b, 0, 0);
-	lv_obj_set_style_radius(b, 0, 0);
-	lv_obj_set_style_pad_all(b, 0, 0);
-	lv_obj_t *t = lv_label_create(b);
-	lv_label_set_text(t, "PANDORA SENSORS");
-	lv_obj_set_style_text_color(t, lv_color_white(), 0);
-	lv_obj_set_style_text_font(t, &lv_font_montserrat_16, 0);
-	lv_obj_center(t);
-	return b;
-}
+/* [对象] 中心脉冲圆 */
+static lv_obj_t *center_dot;
 
-static lv_obj_t *mk_c(lv_obj_t *p, const char *tt, lv_color_t ac) {
-	lv_obj_t *c = lv_obj_create(p);
-	lv_obj_set_size(c, LV_PCT(100), LV_SIZE_CONTENT);
-	lv_obj_set_style_bg_color(c, lv_color_hex(0x293050), 0);
-	lv_obj_set_style_border_width(c, 0, 0);
-	lv_obj_set_style_radius(c, 4, 0);
-	lv_obj_set_style_pad_all(c, 4, 0);
-	lv_obj_t *ln = lv_obj_create(c);
-	lv_obj_set_size(ln, 3, LV_PCT(100));
-	lv_obj_align(ln, LV_ALIGN_LEFT_MID, 0, 0);
-	lv_obj_set_style_bg_color(ln, ac, 0);
-	lv_obj_set_style_border_width(ln, 0, 0);
-	lv_obj_set_style_radius(ln, 0, 0);
-	lv_obj_t *h = lv_label_create(c);
-	lv_label_set_text(h, tt);
-	lv_obj_set_style_text_color(h, lv_color_white(), 0);
-	lv_obj_set_style_text_font(h, &lv_font_montserrat_14, 0);
-	lv_obj_align_to(h, ln, LV_ALIGN_OUT_RIGHT_TOP, 8, 0);
-	return c;
+/* [动画] 全局轨道角度变量 (0~3600, 单位 0.1°, 即 0°~360°) */
+static int32_t orbit_angle = 0;
+
+/* ================================================================
+ * [动画回调] 轨道小球 — 计算四个球的屏幕坐标并实时更新位置
+ *
+ * 四颗球以相同角速度、不同轨道半径公转。
+ * 相位各差 90° (900 单位), 均匀分布在圆周上。
+ * ================================================================ */
+static void orbit_anim_cb(void *var, int32_t v)
+{
+	float rad;
+	lv_coord_t x, y;
+
+	/* [数组] 四个球的指针、轨道半径、初始相位 */
+	lv_obj_t *targets[4] = { ball_r, ball_g, ball_b, ball_y };
+	int32_t  radius[4]   = { 40, 55, 70, 85 };
+	int32_t  phase[4]    = { 0, 900, 1800, 2700 };  /* 各差 90° */
+
+	orbit_angle = v;
+
+	for (int i = 0; i < 4; i++) {
+		/* 将角度换算为弧度，计算球心坐标 */
+		rad = (float)((v + phase[i]) % 3600) * 3.14159f / 1800.0f;
+		x = SCR_CX + (lv_coord_t)((float)radius[i] * cosf(rad)) - 7;
+		y = SCR_CY + (lv_coord_t)((float)radius[i] * sinf(rad)) - 7;
+		lv_obj_set_pos(targets[i], x, y);
+	}
 }
 
-static lv_obj_t *mk_r(lv_obj_t *c, const char *k, const char *u, lv_color_t vc) {
-	lv_obj_t *r = lv_obj_create(c);
-	lv_obj_set_size(r, LV_PCT(100), 22);
-	lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(r, 0, 0);
-	lv_obj_set_style_pad_all(r, 0, 0);
-	lv_obj_set_style_pad_left(r, 6, 0);
-	lv_obj_t *kl = lv_label_create(r);
-	lv_label_set_text(kl, k);
-	lv_obj_set_style_text_color(kl, lv_color_hex(0x808080), 0);
-	lv_obj_set_style_text_font(kl, &lv_font_montserrat_14, 0);
-	lv_obj_align(kl, LV_ALIGN_LEFT_MID, 0, 0);
-	lv_obj_t *vl = lv_label_create(r);
-	lv_label_set_text(vl, "---");
-	lv_obj_set_style_text_color(vl, vc, 0);
-	lv_obj_set_style_text_font(vl, &lv_font_montserrat_14, 0);
-	lv_obj_align_to(vl, kl, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
-	lv_obj_t *ul = lv_label_create(r);
-	lv_label_set_text(ul, u);
-	lv_obj_set_style_text_color(ul, lv_color_hex(0x606060), 0);
-	lv_obj_set_style_text_font(ul, &lv_font_montserrat_14, 0);
-	lv_obj_align_to(ul, vl, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
-	return vl;
+/* ================================================================
+ * [动画回调] 脉冲中心 — 改变圆心控件大小 (10↔24 往返)
+ * ================================================================ */
+static void pulse_cb(void *var, int32_t v)
+{
+	lv_obj_set_size(center_dot, (lv_coord_t)v, (lv_coord_t)v);
 }
 
-static void make_ui(void) {
-	lv_obj_t *s = lv_scr_act();
-	lv_obj_set_style_bg_color(s, lv_color_hex(0x1A1A2E), 0);
-
-	lv_obj_t *tb = mk_t(s);
-	lv_obj_align(tb, LV_ALIGN_TOP_MID, 0, 0);
-
-	lv_obj_t *cs = lv_obj_create(s);
-	lv_obj_set_size(cs, LV_PCT(100), 212);
-	lv_obj_set_style_bg_opa(cs, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(cs, 0, 0);
-	lv_obj_set_style_pad_all(cs, 2, 0);
-	lv_obj_align(cs, LV_ALIGN_TOP_MID, 0, 26);
-
-	/* AHT10 卡片 (青色) */
-	lv_obj_t *c1 = mk_c(cs, "AHT10", lv_color_hex(0x00FFFF));
-	lt = mk_r(c1, "Temp:", "C",   lv_color_white());
-	lh = mk_r(c1, "Hum :", "%",   lv_color_white());
-
-	/* AP3216C 卡片 (黄色) */
-	lv_obj_t *c2 = mk_c(cs, "AP3216C", lv_color_hex(0xFFFF00));
-	la = mk_r(c2, "ALS:", "lux", lv_color_hex(0xFFE000));
-	li = mk_r(c2, "IR :", "",    lv_color_hex(0xFF8800));
-	lp = mk_r(c2, "PS :", "",    lv_color_hex(0x00FF00));
-
-	/* ICM20608 卡片 (绿色) */
-	lv_obj_t *c3 = mk_c(cs, "ICM20608", lv_color_hex(0x00FF00));
-	lax[0] = mk_r(c3, "AccX:", "g",   lv_color_hex(0x00FFFF));
-	lax[1] = mk_r(c3, "AccY:", "g",   lv_color_hex(0x00FFFF));
-	lax[2] = mk_r(c3, "AccZ:", "g",   lv_color_hex(0x00FFFF));
-	lgx[0] = mk_r(c3, "GyrX:", "dps", lv_color_hex(0xFF8800));
-	lgx[1] = mk_r(c3, "GyrY:", "dps", lv_color_hex(0xFF8800));
-	lgx[2] = mk_r(c3, "GyrZ:", "dps", lv_color_hex(0xFF8800));
-
-	/* 底部信息 */
-	lv_obj_t *st = lv_label_create(s);
-	lv_label_set_text(st, "STM32L475 @ 80MHz");
-	lv_obj_set_style_text_color(st, lv_color_hex(0x606060), 0);
-	lv_obj_set_style_text_font(st, &lv_font_montserrat_14, 0);
-	lv_obj_align(st, LV_ALIGN_BOTTOM_MID, 0, -2);
-}
-
-/* ---- 传感器数据刷新 (LVGL timer 回调, 在 lv_timer_handler 上下文执行) ---- */
-static void upd_timer_cb(lv_timer_t *t) {
-	char b[32];
-	struct sensor_data d;
-
-	/* 拷贝共享数据 (mutex保护, 无需LVGL锁 — 本回调运行在lv_timer_handler同一线程) */
-	k_mutex_lock(&g_sensor_data.lock, K_FOREVER);
-	memcpy(&d, &g_sensor_data, sizeof(d));
-	k_mutex_unlock(&g_sensor_data.lock);
-
-	fv(b, sizeof(b), d.temp_val1, d.temp_val2);   lv_label_set_text(lt, b);
-	fv(b, sizeof(b), d.hum_val1, d.hum_val2);     lv_label_set_text(lh, b);
-	fi(b, sizeof(b), d.als_val1);                 lv_label_set_text(la, b);
-	fi(b, sizeof(b), d.ir_val1);                  lv_label_set_text(li, b);
-	fi(b, sizeof(b), d.ps_val1);                  lv_label_set_text(lp, b);
-	fv(b, sizeof(b), d.accel_x_v1, d.accel_x_v2); lv_label_set_text(lax[0], b);
-	fv(b, sizeof(b), d.accel_y_v1, d.accel_y_v2); lv_label_set_text(lax[1], b);
-	fv(b, sizeof(b), d.accel_z_v1, d.accel_z_v2); lv_label_set_text(lax[2], b);
-	fv(b, sizeof(b), d.gyro_x_v1, d.gyro_x_v2);  lv_label_set_text(lgx[0], b);
-	fv(b, sizeof(b), d.gyro_y_v1, d.gyro_y_v2);  lv_label_set_text(lgx[1], b);
-	fv(b, sizeof(b), d.gyro_z_v1, d.gyro_z_v2);  lv_label_set_text(lgx[2], b);
-}
-
-/* ---- 显示线程入口 ---- */
+/**
+ * @brief 显示线程入口函数
+ *
+ * 流程 (参照 stm32_app):
+ *   1. 等待驱动就绪 → 2. 检查显示设备 → 3. 开启显示
+ *   → 4. 开启背光 → 5. 构建动画场景 → 6. 进入 LVGL 主循环
+ *
+ * ★ 不调用 lvgl_init() — LVGL 已通过 CONFIG_LV_Z_AUTO_INIT=y 自动初始化
+ *
+ * @param p1, p2, p3 线程参数（由 K_THREAD_DEFINE 传入，此处未使用）
+ */
 void display_thread_entry(void *p1, void *p2, void *p3)
 {
-	/* 1. 背光: PB7 GPIO */
-	const struct device *gb = DEVICE_DT_GET(DT_NODELABEL(gpiob));
-	k_msleep(300);
-	if (device_is_ready(gb)) {
-		gpio_pin_configure(gb, 7, GPIO_OUTPUT_ACTIVE);
-		gpio_pin_set_raw(gb, 7, 1);
-		LOG_INF("BL ON (PB7)");
-	}
+	int ret;
 
-	/* 2. 获取显示设备 (lvgl_init 已在 SYS_INIT 完成 auto-init) */
-	const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-	if (!device_is_ready(dev)) {
-		LOG_ERR("Display device not ready!");
+	/* [延时] 等待 SPI/MIPI-DBI/ST7789V 驱动完全就绪 */
+	k_msleep(500);
+
+	LOG_INF("Display Thread started");
+
+	/* [检查] 验证显示设备是否已就绪 */
+	if (!device_is_ready(display_dev)) {
+		LOG_ERR("Display device %s is not ready", display_dev->name);
 		return;
 	}
+	LOG_INF("Found display device: %s", display_dev->name);
 
-	/* 3. 开启显示 */
-	display_blanking_off(dev);
-	LOG_INF("Display on: %s", dev->name);
+	/* [操作] 开启显示面板 */
+	ret = display_blanking_off(display_dev);
+	if (ret < 0) {
+		LOG_ERR("Failed to turn display on (ret=%d)", ret);
+		return;
+	}
+	LOG_INF("Display panel ON");
 
-	/* 4. 创建 UI */
-	make_ui();
+	/* [背光] PB7 GPIO 使能 LCD 背光 */
+	const struct device *gpiob = DEVICE_DT_GET(DT_NODELABEL(gpiob));
+	if (device_is_ready(gpiob)) {
+		ret = gpio_pin_configure(gpiob, 7, GPIO_OUTPUT_ACTIVE);
+		if (ret == 0) {
+			gpio_pin_set_raw(gpiob, 7, 1);
+			LOG_INF("Backlight ON (PB7)");
+		}
+	} else {
+		LOG_WRN("GPIOB not ready, backlight skipped");
+	}
 
-	/* 5. 创建传感器刷新 timer (运行在 lv_timer_handler 上下文, 单线程安全) */
-	lv_timer_create(upd_timer_cb, REFRESH, NULL);
+	/* ================================================================
+	 * [场景构建] 创建所有动画元素
+	 * ================================================================ */
 
-	LOG_INF("Display started");
+	/* [屏幕] 深色背景 */
+	lv_obj_t *scr = lv_scr_act();
+	lv_obj_set_style_bg_color(scr, lv_color_hex(0x0A0A18), 0);
+	lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
-	/* 6. 主循环: 驱动 LVGL */
+	/* [控件] 静态轨道参考圆环 — 仅显示边框，透明填充，作视觉引导 */
+	lv_obj_t *guide = lv_obj_create(scr);
+	lv_obj_set_size(guide, 180, 180);
+	lv_obj_set_style_radius(guide, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_opa(guide, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(guide, 1, 0);
+	lv_obj_set_style_border_color(guide, lv_color_hex(0x1A1A44), 0);
+	lv_obj_set_style_border_opa(guide, LV_OPA_60, 0);
+	lv_obj_center(guide);
+
+	/* [控件] 红色小球 — 内轨道，半径 40px */
+	ball_r = lv_obj_create(scr);
+	lv_obj_set_size(ball_r, 14, 14);
+	lv_obj_set_style_radius(ball_r, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_color(ball_r, lv_color_hex(0xFF3355), 0);
+	lv_obj_set_style_border_width(ball_r, 0, 0);
+	lv_obj_set_style_bg_opa(ball_r, LV_OPA_COVER, 0);
+
+	/* [控件] 绿色小球 — 中内轨道，半径 55px */
+	ball_g = lv_obj_create(scr);
+	lv_obj_set_size(ball_g, 14, 14);
+	lv_obj_set_style_radius(ball_g, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_color(ball_g, lv_color_hex(0x33FF77), 0);
+	lv_obj_set_style_border_width(ball_g, 0, 0);
+	lv_obj_set_style_bg_opa(ball_g, LV_OPA_COVER, 0);
+
+	/* [控件] 蓝色小球 — 中外轨道，半径 70px */
+	ball_b = lv_obj_create(scr);
+	lv_obj_set_size(ball_b, 14, 14);
+	lv_obj_set_style_radius(ball_b, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_color(ball_b, lv_color_hex(0x3399FF), 0);
+	lv_obj_set_style_border_width(ball_b, 0, 0);
+	lv_obj_set_style_bg_opa(ball_b, LV_OPA_COVER, 0);
+
+	/* [控件] 黄色小球 — 外轨道，半径 85px */
+	ball_y = lv_obj_create(scr);
+	lv_obj_set_size(ball_y, 14, 14);
+	lv_obj_set_style_radius(ball_y, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_color(ball_y, lv_color_hex(0xFFCC33), 0);
+	lv_obj_set_style_border_width(ball_y, 0, 0);
+	lv_obj_set_style_bg_opa(ball_y, LV_OPA_COVER, 0);
+
+	/* [控件] 中心脉冲圆点 — 半透明白色 */
+	center_dot = lv_obj_create(scr);
+	lv_obj_set_size(center_dot, 16, 16);
+	lv_obj_set_style_radius(center_dot, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_color(center_dot, lv_color_hex(0xFFFFFF), 0);
+	lv_obj_set_style_border_width(center_dot, 0, 0);
+	lv_obj_set_style_bg_opa(center_dot, LV_OPA_70, 0);
+	lv_obj_center(center_dot);
+
+	/* ================================================================
+	 * [动画启动] 两个独立动画同时运行
+	 * ================================================================ */
+
+	/* [动画] 轨道小球 — 5 秒匀速公转一圈，无限循环 */
+	lv_anim_t anim_orbit;
+	lv_anim_init(&anim_orbit);
+	lv_anim_set_var(&anim_orbit, &orbit_angle);
+	lv_anim_set_exec_cb(&anim_orbit, orbit_anim_cb);
+	lv_anim_set_values(&anim_orbit, 0, 3600);
+	lv_anim_set_duration(&anim_orbit, 5000);
+	lv_anim_set_repeat_count(&anim_orbit, LV_ANIM_REPEAT_INFINITE);
+	lv_anim_start(&anim_orbit);
+
+	/* [动画] 脉冲中心 — 0.7s 放大 → 0.7s 缩小，无限往返 */
+	lv_anim_t anim_pulse;
+	lv_anim_init(&anim_pulse);
+	lv_anim_set_var(&anim_pulse, &anim_pulse);  /* var 仅作占位符,实际在回调中操作 center_dot */
+	lv_anim_set_exec_cb(&anim_pulse, pulse_cb);
+	lv_anim_set_values(&anim_pulse, 10, 24);
+	lv_anim_set_duration(&anim_pulse, 700);
+	lv_anim_set_playback_duration(&anim_pulse, 700);
+	lv_anim_set_repeat_count(&anim_pulse, LV_ANIM_REPEAT_INFINITE);
+	lv_anim_start(&anim_pulse);
+
+	LOG_INF("LVGL animation started — 4-layer orbiting balls + pulse center");
+
+	/* [主循环] 驱动 LVGL timer handler, 50 FPS */
 	while (1) {
 		lv_timer_handler();
-		k_msleep(30);
+		k_msleep(20);
 	}
 }
 
-K_THREAD_DEFINE(display_tid, STACK, display_thread_entry, NULL, NULL, NULL, PRIO, 0, 0);
+/* [线程配置] 栈大小和优先级 */
+#define DISPLAY_STACK_SIZE 8192  /* 线程栈大小（单位：字节） */
+#define DISPLAY_PRIORITY    10   /* 线程优先级（数字越大优先级越低） */
+
+/**
+ * @brief 定义并自动启动显示线程
+ *
+ * K_THREAD_DEFINE 参数依次为：
+ * 线程 ID, 栈大小, 入口函数, 参数1, 参数2, 参数3, 优先级, 选项, 启动延迟
+ */
+K_THREAD_DEFINE(display_thread_tid, DISPLAY_STACK_SIZE,
+		display_thread_entry, NULL, NULL, NULL,
+		DISPLAY_PRIORITY, 0, 0);

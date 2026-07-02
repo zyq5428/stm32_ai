@@ -36,7 +36,7 @@
 		/* ★ 指定应用代码分区 — 应用链接到 slot0 (0x08010000) */
 		zephyr,code-partition = &slot0_partition;
 		/* ★ LVGL 显示设备 */
-		zephyr,display = &display;
+		zephyr,display = &st7789v;
 	};
 
 	/* [GPIO-I2C 0] SDA=PC1, SCL=PC0 — AP3216C (0x1E) + ICM20608 (0x68) */
@@ -85,33 +85,149 @@
 	 * 硬件连接 (SPI3):
 	 *   SCK=PB3, MOSI=PB5, CS=PD7, DC=PB4, RST=PB6, BL=PB7
 	 */
-	mipi_dbi: mipi-dbi {
+	mipi-dbi-spi {
 		compatible = "zephyr,mipi-dbi-spi";
-		dc-gpios = <&gpiob 4 GPIO_ACTIVE_HIGH>;
-		reset-gpios = <&gpiob 6 GPIO_ACTIVE_LOW>;
 		spi-dev = <&spi3>;
+		/* * 数据/命令选择引脚 (Data/Command)
+		* 对应物理引脚 PB11，高电平有效 (GPIO_ACTIVE_HIGH)
+		*/
+		dc-gpios = <&gpiob 4 GPIO_ACTIVE_HIGH>;
+		/* * 复位引脚 (Reset)
+		* 对应物理引脚 PB10，低电平有效 (GPIO_ACTIVE_LOW)，拉低复位
+		*/
+		reset-gpios = <&gpiob 6 GPIO_ACTIVE_LOW>;
 		write-only;
+		status = "okay";
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		display: st7789v@0 {
+		st7789v:st7789v@0 {
 			compatible = "sitronix,st7789v";
-			reg = <0>;
+			status = "okay";
 			mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
+			/* * SPI 通信最大频率
+			* 这里设置为 4MHz (4,000,000 Hz)
+			*/
 			mipi-max-frequency = <20000000>;
-			width = <240>; height = <240>;
-			x-offset = <0>; y-offset = <0>;
+			/* * 片选索引
+			* <0> 表示使用 SPI 控制器的第 0 个片选引脚 
+			*/
+			reg = <0>;
+
+			/* ========= 屏幕物理参数 ========= */
+
+			/* 屏幕宽度：240 像素 */
+			width = <240>;
+			/* 屏幕高度：280 像素 */
+			height = <240>;
+			/* * X 轴偏移量
+			* ST7789 驱动芯片支持的分辨率往往比实际屏幕大，需要设置偏移量来对齐图像
+			*/
+			x-offset = <0>;
+			/* Y 轴偏移量：20 像素 */
+			y-offset = <0>;
+
 			pixel-format = <PANEL_PIXEL_FORMAT_RGB_565>;
-			vcom = <0x19>; gctrl = <0x35>;
-			vrhs = <0x12>; vdvs = <0x20>;
-			mdac = <0x00>; gamma = <0x01>; lcm = <0x2C>;
+
+			/* ========= 寄存器初始化参数 (对应 st7789v.h) ========= */
+
+			/* * VCOMS 设置 (VCOMS Setting)
+			* 对应头文件命令: ST7789V_CMD_VCOMS (0xBB)
+			* 作用: 设置 VCOM 电压，控制屏幕对比度和闪烁
+			* 当前值: 0x3F (十进制 63)
+			*/
+			vcom = <0x19>;
+			/* * 栅极控制 (Gate Control)
+			* 对应头文件命令: ST7789V_CMD_GCTRL (0xB7)
+			* 作用: 设置栅极电压输出电平 (VGH/VGL)
+			* 当前值: 0x05 (具体电压需查阅数据手册电气特性表)
+			*/
+			gctrl = <0x35>;
+			/* * VRH 设置 (VRH Setting)
+			* 对应头文件命令: ST7789V_CMD_VRH (0xC3)
+			* 作用: VRH 电压设置，影响显示屏的伽马电压幅度
+			* 当前值: 0x0F
+			*/
+			vrhs = <0x12>;
+			/* * VDV 设置 (VDV Setting)
+			* 对应头文件命令: ST7789V_CMD_VDS (0xC4)
+			* 作用: VDV 电压设置，与 VRH 配合调节
+			* 当前值: 0x20
+			*/
+			vdvs = <0x20>;
+			/* * 存储数据访问控制 (Memory Data Access Control)
+			* 对应头文件命令: ST7789V_CMD_MADCTL (0x36)
+			* 作用: 控制屏幕旋转、镜像、RGB/BGR 顺序(红蓝反色)
+			* 当前值: 0x00 
+			* 解析: 对应 ST7789V_MADCTL_MY_TOP_TO_BOTTOM (0x00) | ST7789V_MADCTL_MX_LEFT_TO_RIGHT (0x00)
+			* 含义: 正常显示，无旋转，RGB 顺序
+			*/
+			mdac = <0x00>;
+			/* * 伽马曲线选择 (Gamma Set)
+			* 对应头文件命令: ST7789V_CMD_GAMSET (0x26)
+			* 作用: 选择预设的伽马曲线
+			* 当前值: 0x01 (通常表示使用 Gamma Curve 1)
+			*/
+			gamma = <0x01>;
+			/* * 接口像素格式 (Interface Pixel Format)
+			* 对应头文件命令: ST7789V_CMD_COLMOD (0x3A)
+			* 作用: 设置颜色深度
+			* 当前值: 0x05 
+			* 解析: 对应 ST7789V_COLMOD_FMT_16bit (5)
+			* 含义: 使用 16位颜色 (RGB565)
+			*/
+			// colmod = <0x65>;
+			/* * LCM 控制 (LCM Control)
+			* 对应头文件命令: ST7789V_CMD_LCMCTRL (0xC0)
+			* 作用: 某些特定面板的设置
+			* 当前值: 0x2c
+			* 解析: 0x20 (XBGR) | 0x08 (XMX) | 0x04 (XMH)
+			* 含义: 根据头文件，设置了 XBGR, XMX, XMH 位
+			*/
+			lcm = <0x2c>;
+			/* * 前廊控制 (Porch Control)
+			* 对应头文件命令: ST7789V_CMD_PORCTRL (0xB2)
+			* 作用: 设置前廊、后廊时间，影响刷新时序
+			* 参数: [0c 0c 00 33 33] (5个字节的参数序列)
+			*/
 			porch-param = [0c 0c 00 33 33];
+			/* * 命令 2 使能 (Command 2 Enable)
+			* 对应头文件命令: ST7789V_CMD_CMD2EN (0xDF)
+			* 作用: 开启特殊命令访问权限 (通常用于制造厂商调试)
+			* 参数: [5a 69 02 01] (解锁密钥序列)
+			*/
 			cmd2en-param = [5a 69 02 01];
+			/* * 电源控制 1 (Power Control 1)
+			* 对应头文件命令: ST7789V_CMD_PWCTRL1 (0xD0)
+			* 作用: 设置 AVDD, VCL, VGH, VGL 电压
+			* 参数: [a4 a1]
+			*/
 			pwctrl1-param = [a4 a1];
+			/* * 正极性伽马校正 (Positive Gamma Control)
+			* 对应头文件命令: ST7789V_CMD_PVGAMCTRL (0xE0)
+			* 作用: 调整红色/高亮部分的灰度表现
+			* 参数: 14个字节的校准数据
+			*/
 			pvgam-param = [d0 04 0d 11 13 2b 3f 54 4c 18 0d 0b 1f 23];
+			/* * 负极性伽马校正 (Negative Gamma Control)
+			* 对应头文件命令: ST7789V_CMD_NVGAMCTRL (0xE1)
+			* 作用: 调整暗部/黑色的灰度表现
+			* 参数: 14个字节的校准数据
+			*/
 			nvgam-param = [d0 04 0c 11 13 2c 3f 44 51 2f 1f 1f 20 23];
+			/* * RAM 控制 (RAM Control)
+			* 对应头文件命令: ST7789V_CMD_RAMCTRL (0xB0)
+			* 作用: 设置接口类型和访问方式
+			* 参数: [00 F0]
+			*/
 			ram-param = [00 F0];
+			/* * RGB 接口控制 (RGB Interface Control)
+			* 对应头文件命令: ST7789V_CMD_RGBCTRL (0xB1)
+			* 作用: 设定 RGB 接口的时序和极性
+			* 参数: [CD 08 14]
+			*/
 			rgb-param = [CD 08 14];
+			// inversion-off;
 		};
 	};
 };
@@ -179,4 +295,56 @@
 			reg = <0x00000000 0x70000>;
 		};
 	};
+};
+/*
+ * ******************************************************************************
+ * ★ slot1 移到外部 NOR Flash W25Q128
+ * W25Q128JV 四功能分区级规划（升级/系统/用户/文件系统）
+ * ******************************************************************************
+ */
+&w25q128jv {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        /* ==========================================
+         * 1. 升级下载槽 (slot1_partition)
+         * 偏移: 0x00000000 -> 大小: 448KB (0x70000)
+         * ========================================== */
+        slot1_partition: partition@0 {
+            label = "image-1";
+            reg = <0x00000000 0x70000>;
+        };
+
+        /* ==========================================
+         * 2. RTOS 系统区 / 备份区 (rtos_sys_partition)
+         * 偏移: 0x00070000 (紧接上一分区)
+         * 大小: 1MB (0x100000)
+         * ========================================== */
+        rtos_sys_partition: partition@70000 {
+            label = "rtos-system";
+            reg = <0x00070000 0x100000>;
+        };
+
+        /* ==========================================
+         * 3. 用户裸数据使用区 (user_raw_partition)
+         * 偏移: 0x00170000 (0x070000 + 0x100000)
+         * 大小: 2MB (0x200000)
+         * ========================================== */
+        user_raw_partition: partition@170000 {
+            label = "user-raw";
+            reg = <0x00170000 0x200000>;
+        };
+
+        /* ==========================================
+         * 4. LittleFS 文件系统区 (storage_partition)
+         * 偏移: 0x00370000 (0x170000 + 0x200000)
+         * 大小: 12.5625MB (0xC90000) -> 吞掉剩下所有空间
+         * ========================================== */
+        storage_partition: partition@370000 {
+            label = "storage";
+            reg = <0x00370000 0xC90000>;
+        };
+    };
 };

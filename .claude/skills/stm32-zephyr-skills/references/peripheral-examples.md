@@ -296,17 +296,101 @@ int main(void)
 
 ---
 
+## LVGL 图形库 + ST7789V LCD (240x240)
+
+> **架构**: LVGL → Zephyr display_write() → ST7789V → MIPI-DBI-SPI → SPI3
+>
+> **关键 Kconfig**:
+> - `CONFIG_LV_COLOR_16_SWAP=y` ★ STM32(小端)→屏幕(大端), 不开颜色异常
+> - Zephyr 4.x `lv_conf.h` 已正确桥接此选项, 无需 CMake 额外定义
+> - 推荐 auto-init (默认), 简化代码结构
+
+```c
+/* === LVGL auto-init 模式 (推荐) === */
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/display.h>
+#include <lvgl.h>
+
+/* LVGL timer 回调: 更新传感器数据 (在 lv_timer_handler 上下文执行, 单线程安全) */
+static void upd_timer_cb(lv_timer_t *t) {
+	/* 读取传感器共享数据 → lv_label_set_text() */
+}
+
+void display_thread_entry(void *p1, void *p2, void *p3)
+{
+	/* 1. 背光 PB7=HIGH */
+	const struct device *gb = DEVICE_DT_GET(DT_NODELABEL(gpiob));
+	k_msleep(300);
+	gpio_pin_configure(gb, 7, GPIO_OUTPUT_ACTIVE);
+	gpio_pin_set_raw(gb, 7, 1);
+
+	/* 2. 显示设备 (auto-init 已完成 lv_init + display_create) */
+	const struct device *dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+	if (!device_is_ready(dev)) { LOG_ERR("disp not ready"); return; }
+	display_blanking_off(dev);
+
+	/* 3. 构建 UI */
+	lv_obj_t *lbl = lv_label_create(lv_scr_act());
+	lv_label_set_text(lbl, "Hello LVGL!");
+	lv_obj_center(lbl);
+
+	/* 4. 注册刷新 timer */
+	lv_timer_create(upd_timer_cb, 500, NULL);
+
+	/* 5. 主循环: 驱动 LVGL (所有操作在同一线程, 无需加锁) */
+	while (1) {
+		lv_timer_handler();   /* LVGL v9 API */
+		k_msleep(30);
+	}
+}
+K_THREAD_DEFINE(display_tid, 6144, display_thread_entry, NULL, NULL, NULL, 10, 0, 0);
+```
+
+### LVGL 常见坑
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| 颜色异常/杂色花屏 | 缺少 `LV_COLOR_16_SWAP` | `CONFIG_LV_COLOR_16_SWAP=y` (Zephyr 4.x 已桥接) |
+| heap corruption | 栈太小或内存池不足 | 栈≥6144, `LV_Z_MEM_POOL_SIZE=16384` |
+| display not found | auto-init 运行早于驱动就绪 | 检查 `zephyr,display` chosen 节点, 验证驱动编译 |
+| UI 操作崩溃 | 多线程竞争 LVGL (手动模式) | 单线程调用 lv_timer_handler, 或包裹 `lvgl_lock()/unlock()` |
+| 背光不亮 | 未驱动背光 GPIO | `gpio_pin_set(gpio_b, 7, 1)` (PB7 高电平) |
+
+### prj.conf (LCD+LVGL 最小)
+
+```ini
+CONFIG_SPI=y
+CONFIG_SPI_STM32=y
+CONFIG_DISPLAY=y
+CONFIG_ST7789V=y
+CONFIG_MIPI_DBI=y
+CONFIG_LVGL=y
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_COLOR_16_SWAP=y        # ★ RGB565 字节交换
+CONFIG_LV_Z_BITS_PER_PIXEL=16
+CONFIG_LV_Z_VDB_SIZE=10
+CONFIG_LV_Z_MEM_POOL_SIZE=16384
+CONFIG_LV_USE_THEME_DEFAULT=y
+CONFIG_LV_THEME_DEFAULT_DARK=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+```
+
+---
+
 ## 外设依赖配置速查
 
-| 外设 | prj.conf | 需要的 overlay 节点 |
-|------|----------|-------------------|
-| GPIO (LED/按键) | `CONFIG_GPIO=y` | 板级已启用 |
+| 外设 | prj.conf | overlay 节点 |
+|------|----------|-------------|
+| GPIO | `CONFIG_GPIO=y` | 板级已启用 |
 | UART | `CONFIG_SERIAL=y` | 板级已启用 |
-| I2C | `CONFIG_I2C=y` | `&i2c3 {}` 或软件 I2C 节点 |
-| SPI | `CONFIG_SPI=y` | `&spi1 {}` / `&spi3 {}` |
-| PWM | `CONFIG_PWM=y` | `&timersX {}` + `pwm` 子节点 |
-| ADC | `CONFIG_ADC=y` | `&adc1 {}` |
-| 传感器 | `CONFIG_SENSOR=y` | I2C/SPI 总线 + 传感器子节点 |
+| I2C | `CONFIG_I2C=y` | gpio-i2c 或 &i2c3 |
+| SPI | `CONFIG_SPI=y` + `CONFIG_SPI_STM32=y` | `&spi1{}` / `&spi3{}` |
+| LCD ST7789V | `CONFIG_DISPLAY=y` `CONFIG_ST7789V=y` `CONFIG_MIPI_DBI=y` | mipi-dbi桥 + st7789v |
+| LVGL | `CONFIG_LVGL=y` + LCD 配置 | 同 LCD |
+| PWM | `CONFIG_PWM=y` | `&timersX{}` |
+| 传感器 | `CONFIG_SENSOR=y` | I2C 总线 + 子节点 |
 | LED API | `CONFIG_LED=y` `CONFIG_LED_GPIO=y` | 板级已定义 `leds {}` |
 | 日志 | `CONFIG_LOG=y` | 无需 overlay |
 | Shell | `CONFIG_SHELL=y` | 配置 `zephyr,shell-uart` |
